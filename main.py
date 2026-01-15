@@ -1639,12 +1639,13 @@ async def handle_done_clicked(query, context: ContextTypes.DEFAULT_TYPE, courier
 async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     order_id = context.user_data.get("awaiting_proof_order_id", "")
+
     if not order_id:
         context.user_data[COURIER_STATE_KEY] = K_NONE
         await ui_render(
             context,
             update.effective_chat.id,
-            "Не понимаю к какому заказу это относится."
+            "Не понимаю, к какому заказу это относится."
         )
         return
 
@@ -1689,16 +1690,23 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
         order.completed_at = now_ts()
         order.status = ORDER_DONE
         ORDERS[order_id] = order
+
         if SHEETS:
             SHEETS.update_order(asdict(order))
             SHEETS.log_event(uid, ROLE_COURIER, "PROOF_RECEIVED", order_id=order_id)
 
+    # 🔴 ЖЕСТКО разрываем старый UI
+    context.user_data.pop(UI_MSG_ID_KEY, None)
+
+    # ✅ Новый экран курьера без активного заказа
     await ui_render(
         context,
         update.effective_chat.id,
-        "✅ Заказ завершен."
+        "✅ Заказ завершен.\n\n🛵 Меню курьера:",
+        reply_markup=kb_courier_menu_approved(uid)
     )
 
+    # уведомляем клиента
     try:
         await tg_retry(lambda: context.bot.send_photo(
             chat_id=order.client_tg_id,
@@ -1708,24 +1716,19 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         log.warning("Client proof send failed: %s", e)
 
+    # уведомляем админов
     for admin_id in ADMIN_IDS:
         try:
             await tg_retry(lambda aid=admin_id: context.bot.send_photo(
                 chat_id=aid,
                 photo=file_id,
-                caption=f"✅ Заказ #{order.order_id} завершен.\nКурьер: {order.courier_name}, {order.courier_phone}"
+                caption=(
+                    f"✅ Заказ #{order.order_id} завершен.\n"
+                    f"Курьер: {order.courier_name}, {order.courier_phone}"
+                )
             ))
         except Exception as e:
             log.warning("Admin proof send failed: %s", e)
-
-    try:
-        await tg_retry(lambda: context.bot.send_message(
-            chat_id=uid,
-            text="🛵 Меню курьера:",
-            reply_markup=kb_courier_menu_approved(uid)
-        ))
-    except Exception as e:
-        log.warning("Courier menu after done failed: %s", e)
 
     context.user_data[COURIER_STATE_KEY] = K_NONE
     context.user_data.pop("awaiting_proof_order_id", None)
@@ -1821,13 +1824,17 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "role:reset":
+        context.user_data.pop(UI_MSG_ID_KEY, None)  # ⬅️ разрыв UI-сессии
+
         context.user_data[USER_ROLE_KEY] = ROLE_UNKNOWN
         context.user_data[CLIENT_STATE_KEY] = C_NONE
         context.user_data[COURIER_STATE_KEY] = K_NONE
         context.user_data.pop("draft_order", None)
         context.user_data.pop("awaiting_proof_order_id", None)
+
         if SHEETS:
             SHEETS.log_event(uid, ROLE_UNKNOWN, "ROLE_RESET")
+
         await ui_render(context, uid, "👤 Кто вы?", reply_markup=kb_role())
         return
 
