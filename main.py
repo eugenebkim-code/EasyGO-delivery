@@ -2157,17 +2157,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "client:new_order":
-        context.user_data[CLIENT_STATE_KEY] = C_NONE
+        context.user_data[CLIENT_STATE_KEY] = C_PICKUP
         context.user_data["draft_order"] = {}
 
         if SHEETS:
-            SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_START_PRICE_CHOICE")
+            SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_START_PICKUP")
 
         await ui_render(
             context,
             uid,
-            "Выберите вариант доставки:",
-            reply_markup=kb_client_price_choice()
+            "📍 Укажите адрес забора.\nАдрес нужно написать текстом и на корейском языке."
         )
         return
 
@@ -2513,51 +2512,31 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
         return
 
-    if S == C_PRICE_FINAL:
-        price = parse_price_krw(text)
-        if price is None:
-            await ui_render(
-                context,
-                uid,
-                "Введите сумму числом. Например: 12000"
-            )
-            return
-
-        d["price_krw"] = price
-        context.user_data["draft_order"] = d
-        context.user_data[CLIENT_STATE_KEY] = C_CONFIRM
-
-        await ui_render(
-            context,
-            uid,
-            render_order_summary_for_confirm(d),
-            reply_markup=kb_confirm_order()
-        )
-        return
-
-
+    
+    
     if role == ROLE_CLIENT:
         S = context.user_data.get(CLIENT_STATE_KEY, C_NONE)
         d = context.user_data.get("draft_order", {})
 
-        if S == C_PRICE_CUSTOM:
+        if S == C_PRICE_FINAL:
             price = parse_price_krw(text)
             if price is None:
                 await ui_render(
                     context,
-                    update.effective_chat.id,
-                    "Введите цену числом (1000–300000). Например: 12000"
+                    uid,
+                    "Введите сумму числом (1000–300000). Например: 12000"
                 )
                 return
+
             d["price_krw"] = price
             context.user_data["draft_order"] = d
-            context.user_data[CLIENT_STATE_KEY] = C_PICKUP
-            if SHEETS:
-                SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_PRICE_CUSTOM_SET", meta=str(price))
+            context.user_data[CLIENT_STATE_KEY] = C_CONFIRM  # просто фиксируем, confirm кнопками
+
             await ui_render(
                 context,
-                update.effective_chat.id,
-                "📍 Укажите адрес забора.\nАдрес нужно написать текстом и на корейском языке."
+                uid,
+                render_order_summary_for_confirm(d),
+                reply_markup=kb_confirm_order()
             )
             return
 
