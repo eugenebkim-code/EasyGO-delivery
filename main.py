@@ -1803,6 +1803,55 @@ async def handle_client_delete_problem(query, context: ContextTypes.DEFAULT_TYPE
 # =========================
 # MAIN CALLBACK HANDLER
 # =========================
+
+async def handle_courier_orders(query, context: ContextTypes.DEFAULT_TYPE):
+    uid = query.from_user.id
+
+    # если есть активный заказ — не пускаем
+    active = get_active_order_for_courier(uid)
+    if active:
+        await ui_render(
+            context,
+            uid,
+            "📦 У вас уже есть активный заказ.",
+            reply_markup=kb_active_order()
+        )
+        return
+
+    # собираем новые заказы
+    orders = [
+        o for o in ORDERS.values()
+        if o.status == ORDER_NEW
+    ]
+
+    if not orders:
+        await ui_render(
+            context,
+            uid,
+            "📭 Сейчас нет доступных заказов."
+        )
+        return
+
+    # простой список
+    lines = ["📋 Доступные заказы:\n"]
+    rows = []
+
+    for o in orders:
+        lines.append(f"Заказ #{o.order_id} • {_fmt_money(o.price)}")
+        rows.append([
+            InlineKeyboardButton(
+                f"Взять #{o.order_id}",
+                callback_data=f"take:{o.order_id}"
+            )
+        ])
+
+    await ui_render(
+        context,
+        uid,
+        "\n".join(lines),
+        reply_markup=InlineKeyboardMarkup(rows)
+    )
+
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not query:
@@ -1813,6 +1862,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uname = query.from_user.username or ""
     current_role = context.user_data.get(USER_ROLE_KEY, ROLE_UNKNOWN)
     data = query.data or ""
+   
+    if data == "courier:orders":
+        await handle_courier_orders(query, context)
+        return
 
     if data == "start:go":
         if SHEETS:
