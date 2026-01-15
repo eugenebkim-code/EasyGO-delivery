@@ -204,6 +204,56 @@ async def tg_retry(call, tries: int = 6, base_sleep: float = 0.7):
     if last_exc:
         raise last_exc
 
+# =========================
+# ONE-MESSAGE UI CORE
+# =========================
+UI_MSG_ID_KEY = "ui_msg_id"
+
+async def ui_render(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str, reply_markup=None):
+    """
+    Рисует один главный UI-экран для пользователя.
+    Если уже есть ui_msg_id - пытаемся редактировать.
+    Если не получилось - отправляем новое и сохраняем его id.
+    """
+    msg_id = context.user_data.get(UI_MSG_ID_KEY)
+
+    if msg_id:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg_id,
+                text=text,
+                reply_markup=reply_markup,
+            )
+            return
+        except Exception:
+            # сообщение могло быть удалено, устарело, или нельзя edit
+            pass
+
+    msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_markup=reply_markup,
+    )
+    context.user_data[UI_MSG_ID_KEY] = msg.message_id
+
+
+async def ui_clear_buttons(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    """
+    Иногда полезно убрать старые кнопки у текущего UI-сообщения.
+    """
+    msg_id = context.user_data.get(UI_MSG_ID_KEY)
+    if not msg_id:
+        return
+    try:
+        await context.bot.edit_message_reply_markup(
+            chat_id=chat_id,
+            message_id=msg_id,
+            reply_markup=None
+        )
+    except Exception:
+        pass
+
 
 # =========================
 # ADDRESS VALIDATION
@@ -1032,15 +1082,17 @@ def init_user_defaults(context: ContextTypes.DEFAULT_TYPE):
 
 async def show_welcome(chat, context: ContextTypes.DEFAULT_TYPE):
     init_user_defaults(context)
-    await tg_retry(lambda: chat.send_message(
-        text=(
+    await ui_render(
+        context,
+        chat.id,
+        (
             "Здравствуйте! 👋\n"
             "EasyGo - это локальная служба доставки: Дунпо, Асан, Синчанг.\n\n"
-            "Чтобы вернуться на главный экран напишите /start в чате. Чтобы начать работу используйте кнопку ниже.\n\n"
+            "Чтобы вернуться на главный экран напишите /start.\n"
             "Если Вы заметили ошибку, пожалуйста, сообщите разработчику: @luv2win"
         ),
         reply_markup=kb_start()
-    ))
+    )
 
 
 # =========================
@@ -1702,7 +1754,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "start:go":
         if SHEETS:
             SHEETS.log_event(uid, current_role, "START_CLICK")
-        await tg_retry(lambda: query.edit_message_text("📍 Где вы находитесь?", reply_markup=kb_location()))
+        await ui_render(context, uid, "📍 Где вы находитесь?", reply_markup=kb_location())
         return
 
     if data.startswith("loc:"):
@@ -1712,13 +1764,15 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             SHEETS.log_event(uid, current_role, "LOCATION_PICKED", meta=loc)
 
         if loc != LOC_DUNPO:
-            await tg_retry(lambda: query.edit_message_text(
+            await ui_render(
+                context,
+                uid,
                 "Пока доставка работает только в Дунпо.\n\nВыберите 'Дунпо', чтобы продолжить.",
                 reply_markup=kb_location()
-            ))
+            )
             return
 
-        await tg_retry(lambda: query.edit_message_text("👤 Кто вы?", reply_markup=kb_role()))
+        await ui_render(context, uid, "👤 Кто вы?", reply_markup=kb_role())
         return
 
     if data == "role:reset":
@@ -1729,7 +1783,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("awaiting_proof_order_id", None)
         if SHEETS:
             SHEETS.log_event(uid, ROLE_UNKNOWN, "ROLE_RESET")
-        await tg_retry(lambda: query.message.reply_text("👤 Кто вы?", reply_markup=kb_role()))
+        await ui_render(context, uid, "👤 Кто вы?", reply_markup=kb_role())
         return
 
     if data == "client:menu":
@@ -1773,10 +1827,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if prof.status == COURIER_APPROVED:
             active = get_active_order_for_courier(uid)
             active_line = f"\nАктивный заказ: #{active.order_id}" if active else ""
-            await tg_retry(lambda: query.message.reply_text(
+            await ui_render(
+                context,
+                uid,
                 f"✅ Вы одобрены как курьер.{active_line}\nНовые заказы будут приходить автоматически.",
                 reply_markup=kb_courier_menu_approved(uid)
-            ))
+            )
             return
 
         await tg_retry(lambda: query.message.reply_text(
@@ -2263,7 +2319,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ))
             return
 
-        await tg_retry(lambda: update.message.reply_text("Что вы хотите сделать?", reply_markup=kb_client_menu()))
+        await ui_render(context, uid, "Что вы хотите сделать?", reply_markup=kb_client_menu())
         return
 
     await show_welcome(update.effective_chat, context)
