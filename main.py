@@ -1999,6 +1999,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         d = context.user_data.get("draft_order", {})
         d["delivery_type"] = delivery_type
         context.user_data["draft_order"] = d
+        context.user_data[CLIENT_STATE_KEY] = C_TYPE_OTHER
 
         if delivery_type == "other":
             context.user_data[CLIENT_STATE_KEY] = C_TYPE_OTHER
@@ -2322,8 +2323,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await ui_render(
                     context,
                     update.effective_chat.id,
-                    "Введите цену числом (только цифры), от 1000 до 300000.\nНапример: 12000"
+                    "Введите цену числом (1000–300000). Например: 12000"
                 )
+                return
             d["price_krw"] = price
             context.user_data["draft_order"] = d
             context.user_data[CLIENT_STATE_KEY] = C_PICKUP
@@ -2344,16 +2346,19 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "📍 Адрес забора должен быть на корейском языке.\nПожалуйста, попробуйте еще раз."
                 )
                 return
+
             d["pickup_address_ko"] = text
+            context.user_data["draft_order"] = d   # ОБЯЗАТЕЛЬНО
             context.user_data[CLIENT_STATE_KEY] = C_DROP
-            
+
             if SHEETS:
                 SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_STEP_PICKUP")
+
             await ui_render(
-                    context,
-                    update.effective_chat.id,
-                    "Укажите адрес доставки. Адрес нужно написать текстом на корейском языке."
-                )
+                context,
+                update.effective_chat.id,
+                "Укажите адрес доставки. Адрес нужно написать текстом на корейском языке."
+            )
             return
 
         if S == C_DROP:
