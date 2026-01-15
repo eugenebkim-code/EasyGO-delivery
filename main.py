@@ -2727,6 +2727,18 @@ async def on_startup(app: Application):
         log.exception("FATAL startup error")
         raise
 
+async def cmd_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+
+    context.user_data.clear()
+    context.user_data["ui_msg_id"] = None
+
+    await ui_render(
+        context,
+        uid,
+        "👋 Добро пожаловать в EasyGo.\n\nВыберите роль:",
+        reply_markup=kb_role()
+    )
 
 # =========================
 # MAIN
