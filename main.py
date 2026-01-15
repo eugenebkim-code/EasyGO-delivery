@@ -1867,38 +1867,7 @@ async def handle_hard_reset(query, context: ContextTypes.DEFAULT_TYPE):
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
-    if data == "courier:stats":
-        uid = query.from_user.id
-
-        now = datetime.now()
-
-        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        week = now - timedelta(days=7)
-        month = now - timedelta(days=30)
-
-        def sum_for(dt_from):
-            return sum(
-                o.price_krw for o in ORDERS.values()
-                if o.courier_tg_id == uid
-                and o.status == ORDER_DONE
-                and parse_ts(o.completed_at)
-                and parse_ts(o.completed_at) >= dt_from
-            )
-
-        text = (
-            "📊 Мои заказы\n\n"
-            f"Сегодня: {sum_for(today)} вон\n"
-            f"7 дней: {sum_for(week)} вон\n"
-            f"30 дней: {sum_for(month)} вон"
-        )
-
-        await ui_render(context, uid, text)
-        return
-    query = update.callback_query
-    if not query:
-        return
-    await tg_retry(lambda: query.answer())
-
+    
     uid = query.from_user.id
     uname = query.from_user.username or ""
     current_role = context.user_data.get(USER_ROLE_KEY, ROLE_UNKNOWN)
