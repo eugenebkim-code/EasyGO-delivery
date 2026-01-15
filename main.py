@@ -1139,7 +1139,7 @@ async def cmd_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context,
         uid,
         "👋 Добро пожаловать в EasyGo.\n\nВыберите роль:",
-        reply_markup=kb_role_select()
+        reply_markup=kb_role()
     )
 
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
