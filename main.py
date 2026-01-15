@@ -785,7 +785,9 @@ def kb_courier_menu_approved(courier_id: int):
     rows.append(
         [InlineKeyboardButton("🔁 Сменить роль", callback_data="role:reset")]
     )
-
+    rows.append(
+        [InlineKeyboardButton("🧹 Начать заново", callback_data="reset:hard")]
+    )
     return InlineKeyboardMarkup(rows)
 
 def kb_active_order():
@@ -1126,6 +1128,19 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=kb_start()
     )
 
+async def cmd_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+
+    # полный сброс состояния
+    context.user_data.clear()
+    context.user_data["ui_msg_id"] = None
+
+    await ui_render(
+        context,
+        uid,
+        "👋 Добро пожаловать в EasyGo.\n\nВыберите роль:",
+        reply_markup=kb_role_select()
+    )
 
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id):
@@ -1904,6 +1919,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             SHEETS.log_event(uid, ROLE_UNKNOWN, "ROLE_RESET")
 
         await ui_render(context, uid, "👤 Кто вы?", reply_markup=kb_role())
+        return
+
+    if data == "reset:hard":
+        await handle_hard_reset(query, context)
         return
 
     if data == "client:menu":
@@ -2702,6 +2721,7 @@ def main():
 
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("admin", admin_cmd))
+    app.add_handler(CommandHandler("go", cmd_go))
     app.add_handler(CallbackQueryHandler(on_callback))
     app.add_handler(
         MessageHandler(filters.TEXT | filters.PHOTO, on_message)
