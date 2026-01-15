@@ -1441,14 +1441,7 @@ async def handle_take_order(query, context: ContextTypes.DEFAULT_TYPE, courier_i
     except Exception as e:
         log.warning("Courier menu send failed: %s", e)
 
-    try:
-        await tg_retry(lambda: context.bot.send_message(
-            chat_id=order.client_tg_id,
-            text=f"✅ Курьер принял ваш заказ.\nКурьер: {order.courier_name} {order.courier_phone}".strip()
-        ))
-    except Exception as e:
-        log.warning("Client notify failed: %s", e)
-
+    
     for admin_id in ADMIN_IDS:
         try:
             await tg_retry(lambda aid=admin_id: context.bot.send_message(
