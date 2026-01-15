@@ -2000,7 +2000,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "courier:current_orders":
         if SHEETS:
             SHEETS.log_event(uid, ROLE_COURIER, "COURIER_CURRENT_ORDERS_OPEN")
-        await show_current_orders_for_courier(context, uid)
+
+        text = build_courier_orders_text(uid)
+        await context.bot.send_message(chat_id=uid, text=text)
+        await query.answer()
         return
 
     if data == "courier:active_order":
