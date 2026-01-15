@@ -709,7 +709,12 @@ def courier_is_approved(courier_id: int) -> bool:
 
 
 def get_active_order_for_courier(courier_id: int) -> Optional["Order"]:
-    active_statuses = (ORDER_TAKEN, ORDER_IN_PROGRESS, ORDER_DONE_PENDING)
+    active_statuses = (
+        ORDER_TAKEN,
+        ORDER_EN_ROUTE,
+        ORDER_PICKED_UP,
+        ORDER_DONE_PENDING,
+    )
     for o in ORDERS.values():
         if o.courier_tg_id == courier_id and o.status in active_statuses:
             return o
@@ -1574,14 +1579,7 @@ async def handle_in_progress_clicked(query, context: ContextTypes.DEFAULT_TYPE, 
             SHEETS.update_order(asdict(order))
             SHEETS.log_event(courier_id, ROLE_COURIER, "ORDER_IN_PROGRESS", order_id=order_id)
 
-    await ui_render(
-        context,
-        courier_id,
-        "🚗 Статус обновлен: выезжаю/в пути.\n\n"
-        "Если доставили, нажмите кнопку ниже.",
-        reply_markup=kb_order_in_progress(order.order_id)
-    )
-
+    
     try:
         await tg_retry(lambda: context.bot.send_message(
             chat_id=order.client_tg_id,
