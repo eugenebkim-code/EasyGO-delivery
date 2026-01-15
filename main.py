@@ -1168,6 +1168,45 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 # NOTIFICATIONS
 # =========================
+
+async def handle_courier_orders(query, context: ContextTypes.DEFAULT_TYPE):
+    uid = query.from_user.id
+
+    if not courier_is_approved(uid):
+        await ui_render(context, uid, "Нет доступа.")
+        return
+
+    active = get_active_order_for_courier(uid)
+    if active:
+        await ui_render(
+            context,
+            uid,
+            "📦 У вас уже есть активный заказ.",
+            reply_markup=kb_active_order()
+        )
+        return
+
+    orders = [o for o in ORDERS.values() if o.status == ORDER_NEW]
+
+    if not orders:
+        await ui_render(context, uid, "📭 Сейчас нет доступных заказов.")
+        return
+
+    orders.sort(key=lambda o: int(o.order_id), reverse=True)
+
+    # ❗ важно: не через ui_render, а обычные send_message
+    await tg_retry(lambda: context.bot.send_message(
+        chat_id=uid,
+        text="📋 Доступные заказы:"
+    ))
+
+    for o in orders[:20]:
+        await tg_retry(lambda order=o: context.bot.send_message(
+            chat_id=uid,
+            text=render_order_offer_text(order),
+            reply_markup=kb_order_offer(order)
+        ))
+
 async def _send_courier_naver_warning_once(context: ContextTypes.DEFAULT_TYPE, courier_id: int):
     # минимальный текст, один раз
     # хранится в user_data конкретного чата, но в send_message без update нет context.user_data.
@@ -1611,7 +1650,13 @@ async def handle_in_progress_clicked(query, context: ContextTypes.DEFAULT_TYPE, 
             SHEETS.update_order(asdict(order))
             SHEETS.log_event(courier_id, ROLE_COURIER, "ORDER_EN_ROUTE", order_id=order_id)
 
-   
+    await ui_render(
+        context,
+        courier_id,
+        render_order_taken_text(order),
+        reply_markup=kb_order_en_route(order.order_id)
+    )
+
     try:
         await tg_retry(lambda: context.bot.send_message(
             chat_id=order.client_tg_id,
