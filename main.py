@@ -1160,11 +1160,12 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if SHEETS:
         SHEETS.log_event(update.effective_user.id, role_for_log(context), "ADMIN_OPEN")
 
-    await tg_retry(lambda: context.bot.send_message(
-        chat_id=update.effective_chat.id,
-        text="🛠 Панель администратора",
+    await ui_render(
+        context,
+        update.effective_chat.id,
+        "🛠 Панель администратора",
         reply_markup=kb_admin_menu()
-    ))
+    )
 
 
 # =========================
@@ -1274,7 +1275,12 @@ async def handle_admin_callbacks(query, context: ContextTypes.DEFAULT_TYPE, data
 
         items.sort(key=lambda o: int(o.order_id), reverse=True)
         for o in items[:10]:
-            await ui_render(context, uid, render_admin_order_line(o))
+            await ui_render(
+                context,
+                uid,
+                render_admin_order_line(o),
+                reply_markup=kb_admin_menu()
+            )
         return
 
     if data == "admin:apps":
