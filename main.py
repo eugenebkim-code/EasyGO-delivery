@@ -1866,8 +1866,12 @@ async def handle_hard_reset(query, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    
-    
+    query = update.callback_query
+    if not query:
+        return
+
+    await tg_retry(lambda: query.answer())
+
     uid = query.from_user.id
     uname = query.from_user.username or ""
     current_role = context.user_data.get(USER_ROLE_KEY, ROLE_UNKNOWN)
