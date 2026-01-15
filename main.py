@@ -69,14 +69,16 @@ async def ui_send(context, chat_id: int, text: str, reply_markup=None):
                 reply_markup=reply_markup,
             )
             return
-        except Exception:
-            pass  # если нельзя отредактировать — упадем в send
+        except Exception as e:
+            log.warning("UI edit failed, resetting ui_msg_id: %s", e)
+            context.user_data.pop(UI_MSG_ID_KEY, None)
 
-    msg = await context.bot.send_message(
-        chat_id=chat_id,
-        text=text,
-        reply_markup=reply_markup,
-    )
+        msg = await context.bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup,
+        )
+    context.user_data[UI_MSG_ID_KEY] = msg.message_id
     context.user_data["last_ui_message_id"] = msg.message_id
 
 
