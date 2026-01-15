@@ -52,36 +52,6 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-
-# =========================
-# UI-хелпер
-# =========================
-
-async def ui_send(context, chat_id: int, text: str, reply_markup=None):
-    msg_id = context.user_data.get("last_ui_message_id")
-
-    if msg_id:
-        try:
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=msg_id,
-                text=text,
-                reply_markup=reply_markup,
-            )
-            return
-        except Exception as e:
-            log.warning("UI edit failed, resetting ui_msg_id: %s", e)
-            context.user_data.pop(UI_MSG_ID_KEY, None)
-
-        msg = await context.bot.send_message(
-            chat_id=chat_id,
-            text=text,
-            reply_markup=reply_markup,
-        )
-    context.user_data[UI_MSG_ID_KEY] = msg.message_id
-    context.user_data["last_ui_message_id"] = msg.message_id
-
-
 # =========================
 # LOGGING
 # =========================
@@ -211,12 +181,7 @@ async def tg_retry(call, tries: int = 6, base_sleep: float = 0.7):
 # =========================
 UI_MSG_ID_KEY = "ui_msg_id"
 
-async def ui_render(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str, reply_markup=None):
-    """
-    Рисует один главный UI-экран для пользователя.
-    Если уже есть ui_msg_id - пытаемся редактировать.
-    Если не получилось - отправляем новое и сохраняем его id.
-    """
+async def ui_render(context, chat_id: int, text: str, reply_markup=None):
     msg_id = context.user_data.get(UI_MSG_ID_KEY)
 
     if msg_id:
@@ -228,9 +193,9 @@ async def ui_render(context: ContextTypes.DEFAULT_TYPE, chat_id: int, text: str,
                 reply_markup=reply_markup,
             )
             return
-        except Exception:
-            # сообщение могло быть удалено, устарело, или нельзя edit
-            pass
+        except Exception as e:
+            log.warning("UI edit failed, resetting ui_msg_id: %s", e)
+            context.user_data.pop(UI_MSG_ID_KEY, None)
 
     msg = await context.bot.send_message(
         chat_id=chat_id,
@@ -1249,7 +1214,7 @@ async def handle_admin_callbacks(query, context: ContextTypes.DEFAULT_TYPE, data
     if data == "admin:new_orders":
         items = list(ORDERS.values())
         if not items:
-            await tg_retry(lambda: query.message.reply_text("Пока нет заказов."))
+            ui_render(context, uid, "Пока нет заказов.")
             return
 
         items.sort(key=lambda o: int(o.order_id), reverse=True)
@@ -1260,7 +1225,7 @@ async def handle_admin_callbacks(query, context: ContextTypes.DEFAULT_TYPE, data
     if data == "admin:apps":
         pending = [c for c in COURIERS.values() if c.status == COURIER_PENDING]
         if not pending:
-            await tg_retry(lambda: query.message.reply_text("Нет заявок."))
+            await ui_render(context, uid, "Нет заявок.")
             return
         for c in pending:
             text = (
@@ -1278,17 +1243,17 @@ async def handle_admin_callbacks(query, context: ContextTypes.DEFAULT_TYPE, data
     if data == "admin:approved":
         approved = [c for c in COURIERS.values() if c.status == COURIER_APPROVED]
         if not approved:
-            await tg_retry(lambda: query.message.reply_text("Нет одобренных курьеров."))
+            await ui_render(context, uid, "Нет одобренных курьеров.")
             return
         lines = [f"{c.name} - {c.phone} - {c.transport} (ID {c.courier_tg_id})" for c in approved]
-        await tg_retry(lambda: query.message.reply_text("\n".join(lines)))
+        await ui_render(context, uid, "\n".join(lines))
         return
 
     if data.startswith("admin:approve:"):
         cid = int(data.split(":")[-1])
         c = COURIERS.get(cid)
         if not c:
-            await tg_retry(lambda: query.message.reply_text("Курьер не найден."))
+            await ui_render(context, uid, "Курьер не найден.")
             return
 
         c.status = COURIER_APPROVED
@@ -1300,7 +1265,7 @@ async def handle_admin_callbacks(query, context: ContextTypes.DEFAULT_TYPE, data
             SHEETS.upsert_courier(asdict(c))
             SHEETS.log_event(uid, ROLE_COURIER, "COURIER_APPROVED", meta=str(cid))
 
-        await tg_retry(lambda: query.message.reply_text("✅ Курьер одобрен."))
+        await ui_render(context, uid, "✅ Курьер одобрен.")
         await tg_retry(lambda: context.bot.send_message(
             chat_id=cid,
             text="✅ Вы одобрены как курьер. Новые заказы будут приходить автоматически.",
@@ -1312,7 +1277,7 @@ async def handle_admin_callbacks(query, context: ContextTypes.DEFAULT_TYPE, data
         cid = int(data.split(":")[-1])
         c = COURIERS.get(cid)
         if not c:
-            await tg_retry(lambda: query.message.reply_text("Курьер не найден."))
+            await ui_render(context, uid, "Курьер не найден.")
             return
 
         c.status = COURIER_REJECTED
@@ -1324,7 +1289,7 @@ async def handle_admin_callbacks(query, context: ContextTypes.DEFAULT_TYPE, data
             SHEETS.upsert_courier(asdict(c))
             SHEETS.log_event(uid, ROLE_COURIER, "COURIER_REJECTED", meta=str(cid))
 
-        await tg_retry(lambda: query.message.reply_text("❌ Заявка отклонена."))
+        await ui_render(context, uid, "❌ Заявка отклонена.")
         await tg_retry(lambda: context.bot.send_message(
             chat_id=cid,
             text="К сожалению, ваша заявка отклонена."
@@ -1416,27 +1381,31 @@ def render_orders_list(items: List[Order], limit: int = 20) -> str:
 # =========================
 async def handle_take_order(query, context: ContextTypes.DEFAULT_TYPE, courier_id: int, order_id: str):
     if not courier_is_approved(courier_id):
-        await tg_retry(lambda: query.message.reply_text("Чтобы брать заказы, нужно одобрение администратора."))
+        await ui_render(
+            context,
+            courier_id,
+            "Чтобы брать заказы, нужно одобрение администратора."
+        )
         return
 
     active = get_active_order_for_courier(courier_id)
     if active:
-        await tg_retry(lambda: query.message.reply_text(
+        await ui_render(context, uid, 
             f"⚠️ У вас уже есть активный заказ #{active.order_id}.\n"
             "Сначала завершите его или откройте через меню.",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("📦 Заказ на руках", callback_data="courier:active_order")]
             ])
-        ))
+        )
         return
 
     async with ORDER_LOCK:
         order = ORDERS.get(order_id)
         if not order:
-            await tg_retry(lambda: query.message.reply_text("Заказ не найден."))
+            await ui_render(context, uid, "Заказ не найден.")
             return
         if order.status != ORDER_NEW:
-            await tg_retry(lambda: query.message.reply_text("Этот заказ уже недоступен."))
+            await ui_render(context, uid, "Этот заказ уже недоступен.")
             if SHEETS:
                 SHEETS.log_event(courier_id, ROLE_COURIER, "TAKE_FAIL_NOT_NEW", order_id=order_id, meta=order.status)
             return
@@ -1457,6 +1426,14 @@ async def handle_take_order(query, context: ContextTypes.DEFAULT_TYPE, courier_i
         text=render_order_taken_text(order),
         reply_markup=kb_order_taken(order.order_id)
     ))
+
+    await ui_render(
+        context,
+        courier_id,
+        render_order_taken_text(order),
+        reply_markup=kb_order_taken(order.order_id)
+    )
+
 
     try:
         await tg_retry(lambda: context.bot.send_message(
@@ -1487,16 +1464,16 @@ async def handle_take_order(query, context: ContextTypes.DEFAULT_TYPE, courier_i
 
 async def handle_bad_address(query, context: ContextTypes.DEFAULT_TYPE, courier_id: int, order_id: str):
     if not courier_is_approved(courier_id):
-        await tg_retry(lambda: query.message.reply_text("Нет доступа."))
+        await ui_render(context, uid, "Нет доступа.")
         return
 
     async with ORDER_LOCK:
         order = ORDERS.get(order_id)
         if not order:
-            await tg_retry(lambda: query.message.reply_text("Заказ не найден."))
+            await ui_render(context, uid, "Заказ не найден.")
             return
         if order.status != ORDER_NEW:
-            await tg_retry(lambda: query.message.reply_text("Этот заказ уже недоступен."))
+            await ui_render(context, uid, "Этот заказ уже недоступен.")
             if SHEETS:
                 SHEETS.log_event(courier_id, ROLE_COURIER, "BADADDR_FAIL_NOT_NEW", order_id=order_id, meta=order.status)
             return
@@ -1516,28 +1493,28 @@ async def handle_bad_address(query, context: ContextTypes.DEFAULT_TYPE, courier_
     except Exception:
         pass
 
-    await tg_retry(lambda: query.message.reply_text(
+    await ui_render(context, uid, 
         f"⚠️ Ок, заказ #{order.order_id} помечен как проблемный и скрыт из доступных."
-    ))
+    )
 
     await notify_order_bad_address(context, order)
 
 
 async def handle_in_progress_clicked(query, context: ContextTypes.DEFAULT_TYPE, courier_id: int, order_id: str):
     if not courier_is_approved(courier_id):
-        await tg_retry(lambda: query.message.reply_text("Нет доступа."))
+        await ui_render(context, uid, "Нет доступа.")
         return
 
     async with ORDER_LOCK:
         order = ORDERS.get(order_id)
         if not order:
-            await tg_retry(lambda: query.message.reply_text("Заказ не найден."))
+            await ui_render(context, courier_id, "Заказ не найден.")
             return
         if order.courier_tg_id != courier_id:
-            await tg_retry(lambda: query.message.reply_text("Этот заказ закреплен за другим курьером."))
+            await ui_render(context, uid, "Этот заказ закреплен за другим курьером.")
             return
         if order.status not in (ORDER_TAKEN, ORDER_IN_PROGRESS):
-            await tg_retry(lambda: query.message.reply_text("Нельзя сменить статус сейчас."))
+            await ui_render(context, uid, "Нельзя сменить статус сейчас.")
             return
 
         if order.status == ORDER_IN_PROGRESS:
@@ -1584,19 +1561,19 @@ async def handle_in_progress_clicked(query, context: ContextTypes.DEFAULT_TYPE, 
 
 async def handle_done_clicked(query, context: ContextTypes.DEFAULT_TYPE, courier_id: int, order_id: str):
     if not courier_is_approved(courier_id):
-        await tg_retry(lambda: query.message.reply_text("Нет доступа."))
+        await ui_render(context, uid, "Нет доступа.")
         return
 
     async with ORDER_LOCK:
         order = ORDERS.get(order_id)
         if not order:
-            await tg_retry(lambda: query.message.reply_text("Заказ не найден."))
+            await ui_render(context, uid, "Заказ не найден.")
             return
         if order.courier_tg_id != courier_id:
-            await tg_retry(lambda: query.message.reply_text("Этот заказ закреплен за другим курьером."))
+            await ui_render(context, uid, "Этот заказ закреплен за другим курьером.")
             return
         if order.status not in (ORDER_TAKEN, ORDER_IN_PROGRESS, ORDER_DONE_PENDING):
-            await tg_retry(lambda: query.message.reply_text("Нельзя завершить этот заказ сейчас."))
+            await ui_render(context, uid, "Нельзя завершить этот заказ сейчас.")
             return
 
         order.status = ORDER_DONE_PENDING
@@ -1609,9 +1586,11 @@ async def handle_done_clicked(query, context: ContextTypes.DEFAULT_TYPE, courier
     context.user_data[COURIER_STATE_KEY] = K_AWAITING_PROOF
     context.user_data["awaiting_proof_order_id"] = order_id
 
-    await tg_retry(lambda: query.message.reply_text(
+    await ui_render(
+        context,
+        courier_id,
         "📸 Пожалуйста, отправьте скриншот подтверждения доставки.\nЭто обязательно."
-    ))
+    )
 
 
 async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1619,26 +1598,42 @@ async def handle_proof_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
     order_id = context.user_data.get("awaiting_proof_order_id", "")
     if not order_id:
         context.user_data[COURIER_STATE_KEY] = K_NONE
-        await tg_retry(lambda: update.message.reply_text("Не понимаю, к какому заказу это относится."))
+        await ui_render(
+            context,
+            update.effective_chat.id,
+            "Не понимаю к какому заказу это относится."
+        )
         return
 
     order = ORDERS.get(order_id)
     if not order:
         context.user_data[COURIER_STATE_KEY] = K_NONE
         context.user_data.pop("awaiting_proof_order_id", None)
-        await tg_retry(lambda: update.message.reply_text("Заказ не найден."))
+        await ui_render(
+            context,
+            update.effective_chat.id,
+            "Заказ не найден."
+        )
         return
 
     if order.courier_tg_id != uid:
         context.user_data[COURIER_STATE_KEY] = K_NONE
         context.user_data.pop("awaiting_proof_order_id", None)
-        await tg_retry(lambda: update.message.reply_text("Этот заказ закреплен за другим курьером."))
+        await ui_render(
+            context,
+            update.effective_chat.id,
+            "Этот заказ закреплен за другим курьером."
+        )
         return
 
     if order.status != ORDER_DONE_PENDING:
         context.user_data[COURIER_STATE_KEY] = K_NONE
         context.user_data.pop("awaiting_proof_order_id", None)
-        await tg_retry(lambda: update.message.reply_text("Этот заказ сейчас не ожидает скриншот."))
+        await ui_render(
+            context,
+            update.effective_chat.id,
+            "Этот заказ сейчас не ожидает скриншот."
+        )
         return
 
     photo = update.message.photo[-1]
@@ -1697,13 +1692,13 @@ async def handle_client_cancel(query, context: ContextTypes.DEFAULT_TYPE, uid: i
     async with ORDER_LOCK:
         order = ORDERS.get(order_id)
         if not order:
-            await tg_retry(lambda: query.message.reply_text("Заказ не найден."))
+            await ui_render(context, uid, "Заказ не найден.")
             return
         if order.client_tg_id != uid:
-            await tg_retry(lambda: query.message.reply_text("Нет доступа."))
+            await ui_render(context, uid, "Нет доступа.")
             return
         if order.status != ORDER_NEW:
-            await tg_retry(lambda: query.message.reply_text("Нельзя отозвать заказ на этой стадии."))
+            await ui_render(context, uid, "Нельзя отозвать заказ на этой стадии.")
             return
 
         order.status = ORDER_CANCELED
@@ -1715,7 +1710,7 @@ async def handle_client_cancel(query, context: ContextTypes.DEFAULT_TYPE, uid: i
             SHEETS.update_order(asdict(order))
             SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_CANCELED_BY_CLIENT", order_id=order_id)
 
-    await tg_retry(lambda: query.message.reply_text("🗑 Заказ отозван.", reply_markup=kb_client_menu()))
+    await ui_render(context, uid, "🗑 Заказ отозван.", reply_markup=kb_client_menu())
     await notify_order_canceled(context, order)
 
 
@@ -1723,13 +1718,13 @@ async def handle_client_delete_problem(query, context: ContextTypes.DEFAULT_TYPE
     async with ORDER_LOCK:
         order = ORDERS.get(order_id)
         if not order:
-            await tg_retry(lambda: query.message.reply_text("Заказ не найден."))
+            await ui_render(context, uid, "Заказ не найден.")
             return
         if order.client_tg_id != uid:
-            await tg_retry(lambda: query.message.reply_text("Нет доступа."))
+            await ui_render(context, uid, "Нет доступа.")
             return
         if order.status != ORDER_PROBLEM:
-            await tg_retry(lambda: query.message.reply_text("Этот заказ нельзя удалить сейчас."))
+            await ui_render(context, uid, "Этот заказ нельзя удалить сейчас.")
             return
 
         order.status = ORDER_CANCELED
@@ -1741,7 +1736,7 @@ async def handle_client_delete_problem(query, context: ContextTypes.DEFAULT_TYPE
             SHEETS.update_order(asdict(order))
             SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_DELETED_AFTER_BADADDR", order_id=order_id)
 
-    await tg_retry(lambda: query.message.reply_text("🗑 Заказ удален.", reply_markup=kb_client_menu()))
+    await ui_render(context, uid, "🗑 Заказ удален.", reply_markup=kb_client_menu())
 
 
 # =========================
@@ -1794,7 +1789,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "client:menu":
-        await tg_retry(lambda: query.message.reply_text("🏠 Меню клиента:", reply_markup=kb_client_menu()))
+        await ui_render(
+            context,
+            uid,
+            "🏠 Меню клиента:",
+            reply_markup=kb_client_menu()
+        )
         return
 
     if data == "role:client":
@@ -1818,17 +1818,21 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         prof = COURIERS.get(uid)
         if not prof:
-            await tg_retry(lambda: query.message.reply_text(
+            await ui_render(
+                context,
+                uid,
                 "Чтобы получать заказы, нужно стать курьером.",
                 reply_markup=kb_courier_menu_not_applied()
-            ))
+            )
             return
 
         if prof.status == COURIER_PENDING:
-            await tg_retry(lambda: query.message.reply_text(
+            await ui_render(
+                context,
+                uid,
                 "Заявка отправлена.\nОжидайте одобрения администратора.",
                 reply_markup=kb_courier_menu_pending()
-            ))
+            )
             return
 
         if prof.status == COURIER_APPROVED:
@@ -1842,10 +1846,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        await tg_retry(lambda: query.message.reply_text(
+        await ui_render(
+            context,
+            uid,
             "Ваша заявка отклонена.",
             reply_markup=kb_courier_menu_not_applied()
-        ))
+        )
         return
 
     if data == "courier:current_orders":
@@ -1857,10 +1863,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "courier:active_order":
         active = get_active_order_for_courier(uid)
         if not active:
-            await tg_retry(lambda: query.message.reply_text(
+            await ui_render(
+                context,
+                uid,
                 "Сейчас у вас нет активного заказа.",
                 reply_markup=kb_courier_menu_approved(uid)
-            ))
+            )
             return
 
         if active.status == ORDER_TAKEN:
@@ -1870,24 +1878,34 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             kb = None
 
-        await tg_retry(lambda: query.message.reply_text(
+        await ui_render(
+            context,
+            uid,
             render_order_taken_text(active),
             reply_markup=kb
-        ))
+        )
         return
 
     if data == "client:status:open":
         o = pick_active_order(uid)
         if not o:
-            await tg_retry(lambda: query.message.reply_text("У вас пока нет заказов.", reply_markup=kb_client_menu()))
+            await ui_render(
+                context,
+                uid,
+                "У вас пока нет заказов.",
+                reply_markup=kb_client_menu()
+            )
             return
+
         can_cancel = (o.status == ORDER_NEW)
-        await tg_retry(lambda: query.message.reply_text(
+        await ui_render(
+            context,
+            uid,
             render_client_status(o),
             reply_markup=kb_client_status(o, can_cancel)
-        ))
+        )
         return
-
+      
     if data.startswith("client:cancel:"):
         order_id = data.split(":", 2)[2]
         await handle_client_cancel(query, context, uid, order_id)
@@ -1899,22 +1917,38 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "client:orders:open":
-        await tg_retry(lambda: query.message.reply_text("Выберите период:", reply_markup=kb_client_orders_filters()))
+        await ui_render(
+            context,
+            uid,
+            "Выберите период:",
+            reply_markup=kb_client_orders_filters()
+        )
         return
 
     if data.startswith("client:orders:"):
         period = data.split(":")[-1]
         items = get_client_orders(uid)
-        filtered = filter_orders_by_period(items, period if period in ("today", "week", "month") else "month")
-        await tg_retry(lambda: query.message.reply_text(
+        filtered = filter_orders_by_period(
+            items,
+            period if period in ("today", "week", "month") else "month"
+        )
+
+        await ui_render(
+            context,
+            uid,
             render_orders_list(filtered),
             reply_markup=kb_client_orders_filters()
-        ))
+        )
         return
 
     if data == "client:new_order":
         if context.user_data.get(USER_LOCATION_KEY) != LOC_DUNPO:
-            await tg_retry(lambda: query.message.reply_text("Пока доставка работает только в Дунпо."))
+            await ui_render(
+                context,
+                uid,
+                "Выберите вариант доставки:",
+                reply_markup=kb_client_price_choice()
+            )
             return
 
         context.user_data[CLIENT_STATE_KEY] = C_NONE
@@ -1922,10 +1956,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if SHEETS:
             SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_START_PRICE_CHOICE")
 
-        await tg_retry(lambda: query.message.reply_text(
+        await ui_render(
+            context,
+            uid,
             "Выберите вариант доставки:",
             reply_markup=kb_client_price_choice()
-        ))
+        )
         return
 
     if data == "client:price:local":
@@ -1935,18 +1971,18 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data[CLIENT_STATE_KEY] = C_PICKUP
         if SHEETS:
             SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_PRICE_LOCAL", meta=str(DEFAULT_PRICE_KRW))
-        await tg_retry(lambda: query.message.reply_text(
+        await ui_render(context,uid,
             "📍 Укажите адрес забора.\nАдрес нужно написать текстом и на корейском языке."
-        ))
+        )
         return
 
     if data == "client:price:custom":
         context.user_data[CLIENT_STATE_KEY] = C_PRICE_CUSTOM
         if SHEETS:
             SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_PRICE_CUSTOM_REQUEST")
-        await tg_retry(lambda: query.message.reply_text(
+        await ui_render(context,uid,
             "Введите вашу стоимость доставки в вонах (только число).\nНапример: 12000"
-        ))
+        )
         return
 
     if data == "client:door_none":
@@ -1956,7 +1992,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data[CLIENT_STATE_KEY] = C_TYPE
         if SHEETS:
             SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_STEP_DOOR_NONE")
-        await tg_retry(lambda: query.message.reply_text("Выберите тип доставки.", reply_markup=kb_delivery_type()))
+        await ui_render(context, uid, "Выберите тип доставки.", reply_markup=kb_delivery_type())
         return
 
     if data.startswith("client:type:"):
@@ -1969,13 +2005,13 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data[CLIENT_STATE_KEY] = C_TYPE_OTHER
             if SHEETS:
                 SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_STEP_TYPE_OTHER")
-            await tg_retry(lambda: query.message.reply_text("Коротко опишите, что нужно доставить."))
+            await ui_render(context, uid, "Коротко опишите, что нужно доставить.")
             return
 
         context.user_data[CLIENT_STATE_KEY] = C_TIME
         if SHEETS:
             SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_STEP_TYPE", meta=t)
-        await tg_retry(lambda: query.message.reply_text("Когда нужна доставка?", reply_markup=kb_delivery_time()))
+        await ui_render(context, uid, "Когда нужна доставка?", reply_markup=kb_delivery_time())
         return
 
     if data.startswith("client:time:"):
@@ -1989,7 +2025,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data[CLIENT_STATE_KEY] = C_CONTACT
             if SHEETS:
                 SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_STEP_TIME", meta=t)
-            await tg_retry(lambda: query.message.reply_text("Укажите контакт получателя.\nИмя и телефон или Telegram."))
+            await ui_render(context, uid, "Укажите контакт получателя.\nИмя и телефон или Telegram.")
             return
 
         d["delivery_time_type"] = "custom"
@@ -1997,7 +2033,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data[CLIENT_STATE_KEY] = C_TIME_CUSTOM
         if SHEETS:
             SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_STEP_TIME_CUSTOM")
-        await tg_retry(lambda: query.message.reply_text("Напишите желаемое время доставки."))
+        await ui_render(context, uid, "Напишите желаемое время доставки.")
         return
 
     if data.startswith("client:confirm:"):
@@ -2007,16 +2043,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data.pop("draft_order", None)
             if SHEETS:
                 SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_CANCEL_BEFORE_CREATE")
-            await tg_retry(lambda: query.message.reply_text("❌ Заказ отменен.", reply_markup=kb_client_menu()))
+            await ui_render(context, uid, "❌ Заказ отменен.", reply_markup=kb_client_menu())
             return
 
         d = context.user_data.get("draft_order", {})
         price = int(d.get("price_krw") or 0)
         if price <= 0:
-            await tg_retry(lambda: query.message.reply_text(
+            await ui_render(context, uid, 
                 "Не указана цена. Начните заново.",
                 reply_markup=kb_client_menu()
-            ))
+            )
             context.user_data[CLIENT_STATE_KEY] = C_NONE
             context.user_data.pop("draft_order", None)
             return
@@ -2024,7 +2060,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not d.get("pickup_address_ko") or not d.get("drop_address_ko") or not d.get("recipient_contact_text"):
             context.user_data[CLIENT_STATE_KEY] = C_NONE
             context.user_data.pop("draft_order", None)
-            await tg_retry(lambda: query.message.reply_text("Не хватает данных. Начните заново.", reply_markup=kb_client_menu()))
+            await ui_render(context, uid, "Не хватает данных. Начните заново.", reply_markup=kb_client_menu())
             return
 
         order_id = SHEETS.next_order_id() if SHEETS else str(int(datetime.now().timestamp()))
@@ -2070,7 +2106,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data[COURIER_STATE_KEY] = K_APPLY_NAME
         if SHEETS:
             SHEETS.log_event(uid, ROLE_COURIER, "COURIER_APPLY_START")
-        await tg_retry(lambda: query.message.reply_text("Введите ваше имя."))
+        await ui_render(context, uid, "Введите ваше имя.")
         return
 
     if data.startswith("badaddr:"):
@@ -2091,7 +2127,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("skip:"):
         if SHEETS:
             SHEETS.log_event(uid, ROLE_COURIER, "ORDER_SKIPPED", order_id=data.split(":", 1)[1])
-        await tg_retry(lambda: query.message.reply_text("Ок."))
+        await ui_render(context, uid, "Ок.")
         return
 
     if data.startswith("done:"):
@@ -2101,7 +2137,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("admin:"):
         if not is_admin(uid):
-            await tg_retry(lambda: query.message.reply_text("Нет доступа."))
+            await ui_render(context, uid, "Нет доступа.")
             return
         await handle_admin_callbacks(query, context, data)
         return
@@ -2124,9 +2160,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.message.photo:
             await handle_proof_photo(update, context)
         else:
-            await tg_retry(lambda: update.message.reply_text(
-                "Нужен именно скриншот в виде изображения.\nПожалуйста, отправьте фото."
-            ))
+            await ui_render(
+            context,
+            update.effective_chat.id,
+            "Нужен скриншот именно в виде изображения. Пожалуйста, отправьте фото."
+        )
         return
 
     role = context.user_data.get(USER_ROLE_KEY, ROLE_UNKNOWN)
@@ -2148,7 +2186,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             context.user_data["apply_name"] = text
             context.user_data[COURIER_STATE_KEY] = K_APPLY_PHONE
-            await tg_retry(lambda: update.message.reply_text("Введите номер телефона."))
+            await ui_render(
+                context,
+                update.effective_chat.id,
+                "Введите номер телефона."
+            )
             return
 
         if state == K_APPLY_PHONE:
@@ -2170,12 +2212,20 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if state == K_APPLY_TRANSPORT:
             if not text:
-                await tg_retry(lambda: update.message.reply_text("Ответьте: Машина или Скутер."))
+                await ui_render(
+                    context,
+                    update.effective_chat.id,
+                    "Ответьте, машина или скутер."
+                )
                 return
             t = text.lower()
             transport = "car" if "маш" in t else "scooter" if "скут" in t else ""
             if not transport:
-                await tg_retry(lambda: update.message.reply_text("Ответьте: Машина или Скутер."))
+                await ui_render(
+                    context,
+                    update.effective_chat.id,
+                    "Ответьте, машина или скутер."
+                )
                 return
 
             name = context.user_data.get("apply_name", "")
@@ -2236,12 +2286,17 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=kb_courier_menu_approved(uid)
             )
         elif prof and prof.status == COURIER_PENDING:
-            await tg_retry(lambda: update.message.reply_text(
-                "Заявка отправлена.\nОжидайте одобрения администратора.",
-                reply_markup=kb_courier_menu_pending()
-            ))
+            await ui_render(
+                    context,
+                    update.effective_chat.id,
+                    "Заявка отправлена. Ожидайте одобрения администратора."
+                )
         else:
-            await tg_retry(lambda: update.message.reply_text("Нажмите /start и выберите роль."))
+            await ui_render(
+                    context,
+                    update.effective_chat.id,
+                    "Нажмите /start и выберите роль."
+                )
         return
 
     if role == ROLE_CLIENT:
@@ -2273,24 +2328,28 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await ui_render(
                     context,
                     update.effective_chat.id,
-                    "🏁 Укажите адрес доставки.\nАдрес нужно написать текстом и на корейском языке."
+                    "📍 Адрес забора должен быть на корейском языке.\nПожалуйста, попробуйте еще раз."
                 )
                 return
             d["pickup_address_ko"] = text
-            context.user_data["draft_order"] = d
             context.user_data[CLIENT_STATE_KEY] = C_DROP
+            
             if SHEETS:
                 SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_STEP_PICKUP")
-            await tg_retry(lambda: update.message.reply_text(
-                "🏁 Укажите адрес доставки.\nАдрес нужно написать текстом и на корейском языке."
-            ))
+            await ui_render(
+                    context,
+                    update.effective_chat.id,
+                    "Укажите адрес доставки. Адрес нужно написать текстом на корейском языке."
+                )
             return
 
         if S == C_DROP:
             if not is_korean_address(text):
-                await tg_retry(lambda: update.message.reply_text(
-                    "Пожалуйста, укажите адрес на корейском языке.\nЭто нужно для навигатора."
-                ))
+                await ui_render(
+                    context,
+                    update.effective_chat.id,
+                    "Пожалуйста, укажите адрес на корейском языке. Это нужно для навигатора."
+                )
                 return
             d["drop_address_ko"] = text
             context.user_data["draft_order"] = d
@@ -2311,7 +2370,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data[CLIENT_STATE_KEY] = C_TYPE
             if SHEETS:
                 SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_STEP_DOOR_TEXT")
-            await tg_retry(lambda: update.message.reply_text("Выберите тип доставки.", reply_markup=kb_delivery_type()))
+            await ui_render(
+                    context,
+                    update.effective_chat.id,
+                    "Выберите тип доставки."
+                )
             return
 
         if S == C_TYPE_OTHER:
@@ -2327,7 +2390,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data[CLIENT_STATE_KEY] = C_TIME
             if SHEETS:
                 SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_STEP_TYPE_OTHER_TEXT")
-            await tg_retry(lambda: update.message.reply_text("Когда нужна доставка?", reply_markup=kb_delivery_time()))
+            await ui_render(
+                    context,
+                    update.effective_chat.id,
+                    "Когда нужна доставка?."
+                )
             return
 
         if S == C_TIME_CUSTOM:
@@ -2343,7 +2410,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context.user_data[CLIENT_STATE_KEY] = C_CONTACT
             if SHEETS:
                 SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_STEP_TIME_CUSTOM_TEXT")
-            await tg_retry(lambda: update.message.reply_text("Укажите контакт получателя.\nИмя и телефон или Telegram."))
+            await ui_render(
+                    context,
+                    update.effective_chat.id,
+                    "Укажите адрес получателя. Имя, телефон или Telegram."
+                )
             return
 
         if S == C_CONTACT:
