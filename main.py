@@ -1898,11 +1898,24 @@ async def handle_hard_reset(query, context: ContextTypes.DEFAULT_TYPE):
     context.user_data[CLIENT_STATE_KEY] = C_NONE
     context.user_data[COURIER_STATE_KEY] = K_NONE
 
+    prof = COURIERS.get(uid)
+
+    # если курьер одобрен — возвращаем меню курьера
+    if prof and prof.status == COURIER_APPROVED:
+        await ui_render(
+            context,
+            uid,
+            "🛵 Меню курьера:",
+            reply_markup=kb_courier_menu_approved(uid)
+        )
+        return
+
+    # иначе — обычный старт
     await ui_render(
         context,
         uid,
         "👋 Добро пожаловать в EasyGo.\n\nВыберите роль:",
-        reply_markup=kb_role()  # та, которая реально есть
+        reply_markup=kb_role()
     )
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2707,7 +2720,21 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             d["recipient_contact_text"] = text
             context.user_data["draft_order"] = d
 
-            # шаг 1: показываем рекомендацию (пока заглушка)
+            # Dunpo — сразу подтверждение
+            if d.get("zone") == "dunpo":
+                d["price_krw"] = DEFAULT_PRICE_KRW
+                context.user_data["draft_order"] = d
+                context.user_data[CLIENT_STATE_KEY] = C_CONFIRM
+
+                await ui_render(
+                    context,
+                    uid,
+                    render_order_summary_for_confirm(d),
+                    reply_markup=kb_confirm_order()
+                )
+                return
+
+            # Other районы — ввод цены
             context.user_data[CLIENT_STATE_KEY] = C_PRICE_FINAL
 
             await ui_render(
