@@ -904,6 +904,32 @@ def kb_client_orders_filters() -> InlineKeyboardMarkup:
 # =========================
 # TEXT HELPERS
 # =========================
+
+def build_courier_stats_text(courier_id: int) -> str:
+    now = datetime.now()
+
+    def in_period(o: Order, days: int):
+        dt = parse_ts(o.completed_at)
+        if not dt:
+            return False
+        return dt >= now - timedelta(days=days)
+
+    done = [
+        o for o in ORDERS.values()
+        if o.courier_tg_id == courier_id and o.status == ORDER_DONE
+    ]
+
+    today = sum(o.price_krw for o in done if in_period(o, 1))
+    week = sum(o.price_krw for o in done if in_period(o, 7))
+    month = sum(o.price_krw for o in done if in_period(o, 30))
+
+    return (
+        "📊 Мои заказы\n\n"
+        f"📅 Сегодня: {today} вон\n"
+        f"📆 Неделя: {week} вон\n"
+        f"🗓 Месяц: {month} вон"
+    )
+
 def _dtype_line(dtype: str, other: str) -> str:
     if dtype == "food":
         return "Еда"
@@ -2004,6 +2030,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = build_courier_orders_text(uid)
         await context.bot.send_message(chat_id=uid, text=text)
         await query.answer()
+        return
+
+    if data == "courier:stats":
+        text = build_courier_stats_text(uid)
+        await ui_render(
+            context,
+            uid,
+            text,
+            reply_markup=kb_courier_menu_approved(uid)
+        )
         return
 
     if data == "courier:active_order":
