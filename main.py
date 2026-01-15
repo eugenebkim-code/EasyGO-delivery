@@ -2157,17 +2157,17 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "client:new_order":
-        # начинаем заказ сразу с адреса забора
-        context.user_data[CLIENT_STATE_KEY] = C_PICKUP
+        context.user_data[CLIENT_STATE_KEY] = C_NONE
         context.user_data["draft_order"] = {}
 
         if SHEETS:
-            SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_START_PICKUP")
+            SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_START_PRICE_CHOICE")
 
         await ui_render(
             context,
             uid,
-            "📍 Укажите адрес забора.\nАдрес нужно написать текстом на корейском языке."
+            "Выберите вариант доставки:",
+            reply_markup=kb_client_price_choice()
         )
         return
 
