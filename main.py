@@ -54,6 +54,33 @@ from googleapiclient.errors import HttpError
 
 
 # =========================
+# UI-хелпер
+# =========================
+
+async def ui_send(context, chat_id: int, text: str, reply_markup=None):
+    msg_id = context.user_data.get("last_ui_message_id")
+
+    if msg_id:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=msg_id,
+                text=text,
+                reply_markup=reply_markup,
+            )
+            return
+        except Exception:
+            pass  # если нельзя отредактировать — упадем в send
+
+    msg = await context.bot.send_message(
+        chat_id=chat_id,
+        text=text,
+        reply_markup=reply_markup,
+    )
+    context.user_data["last_ui_message_id"] = msg.message_id
+
+
+# =========================
 # LOGGING
 # =========================
 logging.basicConfig(
@@ -1040,7 +1067,16 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if SHEETS and update.effective_user:
         SHEETS.log_event(update.effective_user.id, ROLE_UNKNOWN, "START_CMD")
 
-    await show_welcome(update.effective_chat, context)
+    await ui_send(
+        context,
+        update.effective_chat.id,
+        (
+            "Здравствуйте! 👋\n"
+            "EasyGo — локальная служба доставки.\n\n"
+            "Чтобы начать, нажмите кнопку ниже."
+        ),
+        reply_markup=kb_start()
+    )
 
 
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1706,8 +1742,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("draft_order", None)
         if SHEETS:
             SHEETS.log_event(uid, ROLE_CLIENT, "ROLE_PICKED")
-        await tg_retry(lambda: query.message.reply_text("Что вы хотите сделать?", reply_markup=kb_client_menu()))
-        return
+        await ui_send(
+            context,
+            uid,
+            "Что вы хотите сделать?",
+            reply_markup=kb_client_menu()
+        )
 
     if data == "role:courier":
         context.user_data[USER_ROLE_KEY] = ROLE_COURIER
