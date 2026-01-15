@@ -747,7 +747,6 @@ def kb_client_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📝 Создать доставку", callback_data="client:new_order")],
         [InlineKeyboardButton("📦 Статус доставки", callback_data="client:status:open")],
-        [InlineKeyboardButton("🧾 Мои заказы", callback_data="client:orders:open")],
         [InlineKeyboardButton("🔁 Сменить роль", callback_data="role:reset")],
     ])
 
@@ -779,7 +778,7 @@ def kb_courier_menu_approved(courier_id: int):
         ]
     else:
         rows = [
-            [InlineKeyboardButton("📋 Текущие заказы", callback_data="courier:orders")]
+            [InlineKeyboardButton("📊 Мои заказы", callback_data="courier:stats")]
         ]
 
     rows.append(
@@ -1126,20 +1125,6 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Чтобы начать, нажмите кнопку ниже."
         ),
         reply_markup=kb_start()
-    )
-
-async def cmd_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
-
-    # полный сброс состояния
-    context.user_data.clear()
-    context.user_data["ui_msg_id"] = None
-
-    await ui_render(
-        context,
-        uid,
-        "👋 Добро пожаловать в EasyGo.\n\nВыберите роль:",
-        reply_markup=kb_role()
     )
 
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1799,8 +1784,8 @@ async def handle_client_delete_problem(query, context: ContextTypes.DEFAULT_TYPE
         if order.client_tg_id != uid:
             await ui_render(context, uid, "Нет доступа.")
             return
-        if order.status != ORDER_PROBLEM:
-            await ui_render(context, uid, "Этот заказ нельзя удалить сейчас.")
+        if order.status == ORDER_DONE:
+            await ui_render(context, uid, "Этот заказ уже выполнен и не может быть удален.")
             return
 
         order.status = ORDER_CANCELED
@@ -1867,7 +1852,48 @@ async def handle_courier_orders(query, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(rows)
     )
 
+async def handle_hard_reset(query, context: ContextTypes.DEFAULT_TYPE):
+    uid = query.from_user.id
+
+    context.user_data.clear()
+    context.user_data["ui_msg_id"] = None
+
+    await ui_render(
+        context,
+        uid,
+        "👋 Добро пожаловать в EasyGo.\n\nВыберите роль:",
+        reply_markup=kb_role()  # та, которая реально есть
+    )
+
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    
+    if data == "courier:stats":
+        uid = query.from_user.id
+
+        now = datetime.now()
+
+        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        week = now - timedelta(days=7)
+        month = now - timedelta(days=30)
+
+        def sum_for(dt_from):
+            return sum(
+                o.price_krw for o in ORDERS.values()
+                if o.courier_tg_id == uid
+                and o.status == ORDER_DONE
+                and parse_ts(o.completed_at)
+                and parse_ts(o.completed_at) >= dt_from
+            )
+
+        text = (
+            "📊 Мои заказы\n\n"
+            f"Сегодня: {sum_for(today)} вон\n"
+            f"7 дней: {sum_for(week)} вон\n"
+            f"30 дней: {sum_for(month)} вон"
+        )
+
+        await ui_render(context, uid, text)
+        return
     query = update.callback_query
     if not query:
         return
@@ -2437,16 +2463,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             return
 
-        prof = COURIERS.get(uid)
-        if prof and prof.status == COURIER_APPROVED:
-            active = get_active_order_for_courier(uid)
-            active_line = f"Активный заказ: #{active.order_id}\n" if active else ""
-            await ui_render(
-                context,
-                update.effective_chat.id,
-                f"🛵 Меню курьера:\n{active_line}",
-                reply_markup=kb_courier_menu_approved(uid)
-            )
+        
         elif prof and prof.status == COURIER_PENDING:
             await ui_render(
                     context,
