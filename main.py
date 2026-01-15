@@ -136,6 +136,8 @@ COURIER_PENDING = "PENDING"
 COURIER_APPROVED = "APPROVED"
 COURIER_REJECTED = "REJECTED"
 
+ORDER_EN_ROUTE = "EN_ROUTE"
+ORDER_PICKED_UP = "PICKED_UP"
 
 def now_ts() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -814,11 +816,20 @@ def kb_order_offer(order: "Order") -> InlineKeyboardMarkup:
         [InlineKeyboardButton("⏭ Пропустить", callback_data=f"skip:{order.order_id}")],
     ])
 
-
-def kb_order_taken(order_id: str) -> InlineKeyboardMarkup:
+def kb_order_en_route(order_id):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🚗 Выезжаю/в пути", callback_data=f"progress:{order_id}")],
-        [InlineKeyboardButton("✅ Заказ выполнен", callback_data=f"done:{order_id}")],
+        [InlineKeyboardButton("📦 Заказ на руках", callback_data=f"picked:{order_id}")]
+    ])
+
+def kb_order_picked_up(order_id):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Заказ доставлен", callback_data=f"done:{order_id}")]
+    ])
+
+
+def kb_order_taken(order_id):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚗 Выезжаю", callback_data=f"progress:{order_id}")]
     ])
 
 
@@ -1331,6 +1342,32 @@ async def show_current_orders_for_courier(context: ContextTypes.DEFAULT_TYPE, ch
         except Exception as e:
             log.warning("Failed sending current order %s to %s: %s", o.order_id, chat_id, e)
 
+async def handle_picked_up(query, context, courier_id: int, order_id: str):
+    async with ORDER_LOCK:
+        order = ORDERS.get(order_id)
+        if not order:
+            await ui_render(context, courier_id, "Заказ не найден.")
+            return
+        if order.courier_tg_id != courier_id:
+            await ui_render(context, courier_id, "Это не ваш заказ.")
+            return
+        if order.status != ORDER_EN_ROUTE:
+            await ui_render(context, courier_id, "Сейчас нельзя отметить заказ на руках.")
+            return
+
+        order.status = ORDER_PICKED_UP
+        ORDERS[order_id] = order
+
+        if SHEETS:
+            SHEETS.update_order(asdict(order))
+            SHEETS.log_event(courier_id, ROLE_COURIER, "ORDER_PICKED_UP", order_id=order_id)
+
+    await ui_render(
+        context,
+        courier_id,
+        "📦 Заказ у вас на руках.\nКогда доставите — нажмите кнопку ниже.",
+        reply_markup=kb_order_picked_up(order.order_id)
+    )
 
 # =========================
 # CLIENT: STATUS + ORDERS LIST
@@ -1414,6 +1451,14 @@ async def handle_take_order(query, context: ContextTypes.DEFAULT_TYPE, courier_i
 
         prof = COURIERS.get(courier_id)
         order.status = ORDER_TAKEN
+        ORDERS[order_id] = order
+
+        await ui_render(
+            context,
+            courier_id,
+            render_order_taken_text(order),
+            reply_markup=kb_order_taken(order.order_id)
+        )
         order.taken_at = now_ts()
         order.courier_tg_id = courier_id
         order.courier_name = prof.name if prof else ""
@@ -1511,8 +1556,18 @@ async def handle_in_progress_clicked(query, context: ContextTypes.DEFAULT_TYPE, 
             await tg_retry(lambda: query.edit_message_reply_markup(reply_markup=kb_order_in_progress(order.order_id)))
             return
 
-        order.status = ORDER_IN_PROGRESS
-        order.in_progress_at = now_ts()
+        if order.status != ORDER_TAKEN:
+            await ui_render(context, courier_id, "Нельзя выехать сейчас.")
+            return
+        
+        await ui_render(
+            context,
+            courier_id,
+            "🚗 Вы выехали.\nНажмите кнопку, когда заказ будет у вас на руках.",
+            reply_markup=kb_order_en_route(order.order_id)
+        )
+
+        order.status = ORDER_EN_ROUTE
         ORDERS[order_id] = order
 
         if SHEETS:
@@ -1562,8 +1617,8 @@ async def handle_done_clicked(query, context: ContextTypes.DEFAULT_TYPE, courier
         if order.courier_tg_id != courier_id:
             await ui_render(context, uid, "Этот заказ закреплен за другим курьером.")
             return
-        if order.status not in (ORDER_TAKEN, ORDER_IN_PROGRESS, ORDER_DONE_PENDING):
-            await ui_render(context, uid, "Нельзя завершить этот заказ сейчас.")
+        if order.status != ORDER_PICKED_UP:
+            await ui_render(context, courier_id, "Сначала возьмите заказ на руки.")
             return
 
         order.status = ORDER_DONE_PENDING
@@ -1845,6 +1900,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    if data.startswith("picked:"):
+        order_id = data.split(":", 1)[1]
+        await handle_picked_up(query, context, uid, order_id)
+        return
+
+
     if data == "courier:current_orders":
         if SHEETS:
             SHEETS.log_event(uid, ROLE_COURIER, "COURIER_CURRENT_ORDERS_OPEN")
@@ -1864,8 +1925,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if active.status == ORDER_TAKEN:
             kb = kb_order_taken(active.order_id)
-        elif active.status == ORDER_IN_PROGRESS:
-            kb = kb_order_in_progress(active.order_id)
+        elif active.status == ORDER_EN_ROUTE:
+            kb = kb_order_en_route(active.order_id)
+        elif active.status == ORDER_PICKED_UP:
+            kb = kb_order_picked_up(active.order_id)
         else:
             kb = None
 
