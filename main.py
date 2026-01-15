@@ -2194,14 +2194,13 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         d["price_mode"] = "custom"
         context.user_data["draft_order"] = d
 
-        context.user_data[CLIENT_STATE_KEY] = C_PRICE_FINAL
+        context.user_data[CLIENT_STATE_KEY] = C_PICKUP
 
         await ui_render(
             context,
             uid,
-            "💰 Укажите цену доставки в вонах (числом)."
+            "📍 Укажите адрес забора.\nАдрес нужно написать текстом и на корейском языке."
         )
-        return
 
     if data == "client:door_none":
         d = context.user_data.get("draft_order", {})
@@ -2696,16 +2695,13 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             context.user_data[CLIENT_STATE_KEY] = C_CONFIRM
 
-            if SHEETS:
-                SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_STEP_CONTACT")
+            context.user_data[CLIENT_STATE_KEY] = C_PRICE_FINAL
 
             await ui_render(
                 context,
-                update.effective_chat.id,
-                render_order_summary_for_confirm(d),
-                reply_markup=kb_confirm_order()
+                uid,
+                "💰 Укажите цену доставки в вонах.\nРекомендованная стоимость будет показана."
             )
-            return
 
         await ui_render(context, uid, "Что вы хотите сделать?", reply_markup=kb_client_menu())
         return
