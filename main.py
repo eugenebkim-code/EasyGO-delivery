@@ -2384,10 +2384,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if SHEETS:
                 SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_STEP_DOOR_TEXT")
             await ui_render(
-                    context,
-                    update.effective_chat.id,
-                    "Выберите тип доставки."
-                )
+                context,
+                update.effective_chat.id,
+                "Выберите тип доставки.",
+                reply_markup=kb_delivery_type()
+            )
             return
 
         if S == C_TYPE_OTHER:
