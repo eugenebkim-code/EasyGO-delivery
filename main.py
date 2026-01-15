@@ -105,11 +105,9 @@ COURIER_STATE_KEY = "courier_state"
 
 # client states
 C_NONE = "C_NONE"
-C_PRICE_CUSTOM = "C_PRICE_CUSTOM"
 C_PRICE_FINAL = "C_PRICE_FINAL"
 C_PICKUP = "C_PICKUP"
 C_DROP = "C_DROP"
-C_PRICE_RECOMMENDED = "C_PRICE_RECOMMENDED"
 C_PRICE_ZONE = "C_PRICE_ZONE"
 C_DOOR = "C_DOOR"
 C_TYPE = "C_TYPE"
@@ -129,7 +127,6 @@ K_AWAITING_PROOF = "K_AWAITING_PROOF"
 # order status
 ORDER_NEW = "NEW"
 ORDER_TAKEN = "TAKEN"
-ORDER_IN_PROGRESS = "IN_PROGRESS"
 ORDER_DONE_PENDING = "DONE_PENDING_PROOF"
 ORDER_DONE = "DONE"
 ORDER_CANCELED = "CANCELED"
@@ -855,12 +852,6 @@ def kb_order_taken(order_id):
     ])
 
 
-def kb_order_in_progress(order_id: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Заказ выполнен", callback_data=f"done:{order_id}")],
-    ])
-
-
 def kb_admin_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🆕 Новые заказы", callback_data="admin:new_orders")],
@@ -960,7 +951,7 @@ def order_status_ru(o: Order) -> str:
         return "Ищем курьера"
     if o.status == ORDER_TAKEN:
         return "Курьер назначен"
-    if o.status == ORDER_IN_PROGRESS:
+    if o.status == ORDER_EN_ROUTE:
         return "В пути"
     if o.status == ORDER_DONE_PENDING:
         return "Ожидается подтверждение"
@@ -977,7 +968,8 @@ def render_order_summary_for_confirm(d: Dict[str, Any]) -> str:
     door = d.get("door_code", "") or "нет"
     dtype = _dtype_line(d.get("delivery_type", ""), d.get("delivery_type_other_text", ""))
     tline = _time_line(d.get("delivery_time_type", ""), d.get("delivery_time_text", ""))
-    price = int(d.get("price_krw") or DEFAULT_PRICE_KRW)
+    price = int(d.get("price_krw") or 0)
+    price_line = f"{price} вон" if price > 0 else "уточняется"
 
     return (
         "🧾 Проверьте заказ:\n\n"
@@ -987,7 +979,8 @@ def render_order_summary_for_confirm(d: Dict[str, Any]) -> str:
         f"📦 Тип доставки:\n{dtype}\n\n"
         f"🕒 Время:\n{tline}\n\n"
         f"📞 Контакт:\n{d.get('recipient_contact_text', '')}\n\n"
-        f"💰 Цена: {price} вон"
+        f"💰 Цена: {price_line}"
+        
     )
 
 
@@ -1033,12 +1026,12 @@ def render_client_status(o: Order) -> str:
     lines.append(o.drop_address_ko)
     lines.append("")
 
-    if o.status in (ORDER_TAKEN, ORDER_IN_PROGRESS, ORDER_DONE_PENDING, ORDER_DONE):
+    if o.status in (ORDER_TAKEN, ORDER_EN_ROUTE, ORDER_DONE_PENDING, ORDER_DONE):
         if o.courier_name or o.courier_phone:
             lines.append(f"Курьер: {o.courier_name} {o.courier_phone}".strip())
         if o.taken_at:
             lines.append(f"Курьер назначен: {o.taken_at}")
-    if o.status in (ORDER_IN_PROGRESS, ORDER_DONE_PENDING, ORDER_DONE):
+    if o.status in (ORDER_EN_ROUTE, ORDER_DONE_PENDING, ORDER_DONE):
         if o.in_progress_at:
             lines.append(f"В пути с: {o.in_progress_at}")
     if o.status == ORDER_DONE:
@@ -1132,7 +1125,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data[COURIER_STATE_KEY] = K_NONE
     context.user_data.pop("draft_order", None)
     context.user_data.pop("awaiting_proof_order_id", None)
-
+    
     if SHEETS and update.effective_user:
         SHEETS.log_visit(
             user_tg_id=update.effective_user.id,
@@ -1434,7 +1427,7 @@ def get_client_orders(uid: int) -> List[Order]:
 def pick_active_order(uid: int) -> Optional[Order]:
     items = get_client_orders(uid)
     for o in items:
-        if o.status not in (ORDER_DONE, ORDER_CANCELED):
+        if o.status not in (ORDER_DONE, ORDER_CANCELED, ORDER_PROBLEM):
             return o
     return items[0] if items else None
 
@@ -1560,17 +1553,17 @@ async def handle_bad_address(query, context: ContextTypes.DEFAULT_TYPE, courier_
     async with ORDER_LOCK:
         order = ORDERS.get(order_id)
         if not order:
-            await ui_render(context, uid, "Заказ не найден.")
+            await ui_render(context, courier_id, "Заказ не найден.")
             return
         if order.status != ORDER_NEW:
-            await ui_render(context, uid, "Этот заказ уже недоступен.")
+            await ui_render(context, courier_id, "Этот заказ уже недоступен.")
             if SHEETS:
                 SHEETS.log_event(courier_id, ROLE_COURIER, "BADADDR_FAIL_NOT_NEW", order_id=order_id, meta=order.status)
             return
 
         order.status = ORDER_PROBLEM
-        order.canceled_at = now_ts()
-        order.canceled_by = "bad_address"
+        order.canceled_at = ""
+        order.canceled_by = ""
         ORDERS[order_id] = order
 
         if SHEETS:
@@ -1592,7 +1585,7 @@ async def handle_bad_address(query, context: ContextTypes.DEFAULT_TYPE, courier_
 
 async def handle_in_progress_clicked(query, context: ContextTypes.DEFAULT_TYPE, courier_id: int, order_id: str):
     if not courier_is_approved(courier_id):
-        await ui_render(context, uid, "Нет доступа.")
+        await ui_render(context, courier_id, "Нет доступа.")
         return
     
     async with ORDER_LOCK:
@@ -1600,38 +1593,24 @@ async def handle_in_progress_clicked(query, context: ContextTypes.DEFAULT_TYPE, 
         if not order:
             await ui_render(context, courier_id, "Заказ не найден.")
             return
-        if order.courier_tg_id != courier_id:
-            await ui_render(context, uid, "Этот заказ закреплен за другим курьером.")
-            return
-        if order.status not in (ORDER_TAKEN, ORDER_IN_PROGRESS):
-            await ui_render(context, uid, "Нельзя сменить статус сейчас.")
-            return
 
-        if order.status == ORDER_IN_PROGRESS:
-            await tg_retry(lambda: query.edit_message_reply_markup(reply_markup=kb_order_in_progress(order.order_id)))
+        if order.courier_tg_id != courier_id:
+            await ui_render(context, courier_id, "Этот заказ закреплен за другим курьером.")
             return
 
         if order.status != ORDER_TAKEN:
             await ui_render(context, courier_id, "Нельзя выехать сейчас.")
             return
         
-        await ui_render(
-            context,
-            courier_id,
-            "🚗 Вы выехали.\nНажмите кнопку, когда заказ будет у вас на руках.",
-            reply_markup=kb_order_en_route(order.order_id)
-        )
-
+        order.in_progress_at = now_ts()
         order.status = ORDER_EN_ROUTE
         ORDERS[order_id] = order
 
         if SHEETS:
             SHEETS.update_order(asdict(order))
-            SHEETS.log_event(courier_id, ROLE_COURIER, "ORDER_IN_PROGRESS", order_id=order_id)
+            SHEETS.log_event(courier_id, ROLE_COURIER, "ORDER_EN_ROUTE", order_id=order_id)
 
-    order.in_progress_at = now_ts()
-    order.status = ORDER_EN_ROUTE
-
+   
     try:
         await tg_retry(lambda: context.bot.send_message(
             chat_id=order.client_tg_id,
@@ -1656,16 +1635,16 @@ async def handle_in_progress_clicked(query, context: ContextTypes.DEFAULT_TYPE, 
 
 async def handle_done_clicked(query, context: ContextTypes.DEFAULT_TYPE, courier_id: int, order_id: str):
     if not courier_is_approved(courier_id):
-        await ui_render(context, uid, "Нет доступа.")
+        await ui_render(context, courier_id, "Нет доступа.")
         return
 
     async with ORDER_LOCK:
         order = ORDERS.get(order_id)
         if not order:
-            await ui_render(context, uid, "Заказ не найден.")
+            await ui_render(context, courier_id, "Заказ не найден.")
             return
         if order.courier_tg_id != courier_id:
-            await ui_render(context, uid, "Этот заказ закреплен за другим курьером.")
+            await ui_render(context, courier_id, "Этот заказ закреплен за другим курьером.")
             return
         if order.status != ORDER_PICKED_UP:
             await ui_render(context, courier_id, "Сначала возьмите заказ на руки.")
@@ -1915,7 +1894,9 @@ async def handle_hard_reset(query, context: ContextTypes.DEFAULT_TYPE):
     uid = query.from_user.id
 
     context.user_data.clear()
-    context.user_data["ui_msg_id"] = None
+    context.user_data[UI_MSG_ID_KEY] = None
+    context.user_data[CLIENT_STATE_KEY] = C_NONE
+    context.user_data[COURIER_STATE_KEY] = K_NONE
 
     await ui_render(
         context,
@@ -2154,6 +2135,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "client:new_order":
+        context.user_data.pop(UI_MSG_ID_KEY, None)
         context.user_data["draft_order"] = {}
         context.user_data[CLIENT_STATE_KEY] = C_PRICE_ZONE
 
@@ -2163,7 +2145,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await ui_render(
             context,
             uid,
-            "Выберите вариант доставки:",
+            "Выберите зону доставки:",
             reply_markup=kb_client_price_choice()
         )
         return
@@ -2173,7 +2155,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         d = context.user_data.get("draft_order", {})
-        d["price_mode"] = "local"
+        d["zone"] = "dunpo"
         d["price_krw"] = DEFAULT_PRICE_KRW
         context.user_data["draft_order"] = d
 
@@ -2191,7 +2173,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         d = context.user_data.get("draft_order", {})
-        d["price_mode"] = "custom"
+        d["zone"] = "other"
         context.user_data["draft_order"] = d
 
         context.user_data[CLIENT_STATE_KEY] = C_PICKUP
@@ -2201,8 +2183,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             uid,
             "📍 Укажите адрес забора.\nАдрес нужно написать текстом и на корейском языке."
         )
+        return
 
     if data == "client:door_none":
+        if context.user_data.get(CLIENT_STATE_KEY) != C_DOOR:
+            return
+
         d = context.user_data.get("draft_order", {})
         d["door_code"] = ""
         context.user_data["draft_order"] = d
@@ -2213,13 +2199,15 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("client:type:"):
+        if context.user_data.get(CLIENT_STATE_KEY) != C_TYPE:
+            return
+
         delivery_type = data.split(":")[-1]
 
         d = context.user_data.get("draft_order", {})
         d["delivery_type"] = delivery_type
         context.user_data["draft_order"] = d
-        context.user_data[CLIENT_STATE_KEY] = C_TYPE_OTHER
-
+        
         if delivery_type == "other":
             context.user_data[CLIENT_STATE_KEY] = C_TYPE_OTHER
 
@@ -2241,13 +2229,15 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await ui_render(
             context,
-            uid,
+            update.effective_chat.id,
             "Когда нужна доставка?",
             reply_markup=kb_delivery_time()
         )
         return
-
     if data.startswith("client:time:"):
+        if context.user_data.get(CLIENT_STATE_KEY) != C_TIME:
+            return
+
         t = data.split(":")[-1]
         d = context.user_data.get("draft_order", {})
 
@@ -2270,30 +2260,61 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("client:confirm:"):
+        if context.user_data.get(CLIENT_STATE_KEY) != C_CONFIRM:
+            return
+
         ans = data.split(":")[-1]
+
+        # ---- CANCEL ----
         if ans == "no":
             context.user_data[CLIENT_STATE_KEY] = C_NONE
             context.user_data.pop("draft_order", None)
+            context.user_data.pop(UI_MSG_ID_KEY, None)
+
             if SHEETS:
                 SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_CANCEL_BEFORE_CREATE")
-            await ui_render(context, uid, "❌ Заказ отменен.", reply_markup=kb_client_menu())
+
+            await ui_render(
+                context,
+                uid,
+                "❌ Заказ отменен.",
+                reply_markup=kb_client_menu()
+            )
             return
 
+        # ---- CONFIRM ----
         d = context.user_data.get("draft_order", {})
+
+        # Dunpo — фиксированная цена
+        if d.get("zone") == "dunpo":
+            d["price_krw"] = DEFAULT_PRICE_KRW
+            context.user_data["draft_order"] = d
+
         price = int(d.get("price_krw") or 0)
         if price <= 0:
-            await ui_render(context, uid, 
+            context.user_data[CLIENT_STATE_KEY] = C_NONE
+            context.user_data.pop("draft_order", None)
+            context.user_data.pop(UI_MSG_ID_KEY, None)
+
+            await ui_render(
+                context,
+                uid,
                 "Не указана цена. Начните заново.",
                 reply_markup=kb_client_menu()
             )
-            context.user_data[CLIENT_STATE_KEY] = C_NONE
-            context.user_data.pop("draft_order", None)
             return
 
         if not d.get("pickup_address_ko") or not d.get("drop_address_ko") or not d.get("recipient_contact_text"):
             context.user_data[CLIENT_STATE_KEY] = C_NONE
             context.user_data.pop("draft_order", None)
-            await ui_render(context, uid, "Не хватает данных. Начните заново.", reply_markup=kb_client_menu())
+            context.user_data.pop(UI_MSG_ID_KEY, None)
+
+            await ui_render(
+                context,
+                uid,
+                "Не хватает данных. Начните заново.",
+                reply_markup=kb_client_menu()
+            )
             return
 
         order_id = SHEETS.next_order_id() if SHEETS else str(int(datetime.now().timestamp()))
@@ -2318,14 +2339,17 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             delivery_time_type=d.get("delivery_time_type", ""),
             delivery_time_text=d.get("delivery_time_text", ""),
         )
+
         ORDERS[order_id] = order
 
         if SHEETS:
             SHEETS.insert_order(asdict(order))
             SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_CONFIRMED", order_id=order_id)
 
+        # ---- CLEAN EXIT ----
         context.user_data[CLIENT_STATE_KEY] = C_NONE
         context.user_data.pop("draft_order", None)
+        context.user_data.pop(UI_MSG_ID_KEY, None)
 
         await ui_render(
             context,
@@ -2394,23 +2418,31 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await handle_proof_photo(update, context)
         else:
             await ui_render(
-            context,
-            update.effective_chat.id,
-            "Нужен скриншот именно в виде изображения. Пожалуйста, отправьте фото."
-        )
+                context,
+                update.effective_chat.id,
+                "Нужен скриншот именно в виде изображения. Пожалуйста, отправьте фото."
+            )
         return
 
     role = context.user_data.get(USER_ROLE_KEY, ROLE_UNKNOWN)
 
     S_client = context.user_data.get(CLIENT_STATE_KEY, C_NONE)
-    if S_client != C_NONE or "draft_order" in context.user_data:
-        role = ROLE_CLIENT
 
-    if role == ROLE_COURIER:
-        state = context.user_data.get(COURIER_STATE_KEY, K_NONE)
+    # защитный сброс: если draft_order есть, но FSM выключен - чистим, чтобы не оживал флоу
+    if S_client == C_NONE and "draft_order" in context.user_data:
+        context.user_data.pop("draft_order", None)
+        context.user_data.pop(UI_MSG_ID_KEY, None)
+
+    # FSM клиента работает только когда state != C_NONE
+    
+    courier_state = context.user_data.get(COURIER_STATE_KEY, K_NONE)
+
+    if courier_state != K_NONE and context.user_data.get(USER_ROLE_KEY) == ROLE_COURIER:
+        # courier FSM
+        
         prof = COURIERS.get(uid)
 
-        if state == K_APPLY_NAME:
+        if courier_state == K_APPLY_NAME:
             if not text:
                 await ui_render(
                     context,
@@ -2427,7 +2459,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        if state == K_APPLY_PHONE:
+        if courier_state == K_APPLY_PHONE:
             if not text:
                 await ui_render(
                     context,
@@ -2444,7 +2476,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        if state == K_APPLY_TRANSPORT:
+        if courier_state == K_APPLY_TRANSPORT:
             if not text:
                 await ui_render(
                     context,
@@ -2526,12 +2558,12 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     
     
-    if role == ROLE_CLIENT:
-        S = context.user_data.get(CLIENT_STATE_KEY, C_NONE)
+    if S_client != C_NONE:
         d = context.user_data.get("draft_order", {})
-
-        if S == C_PRICE_FINAL:
+        
+        if S_client == C_PRICE_FINAL:
             price = parse_price_krw(text)
+            
             if price is None:
                 await ui_render(
                     context,
@@ -2543,16 +2575,17 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             d["price_krw"] = price
             context.user_data["draft_order"] = d
 
-            context.user_data[CLIENT_STATE_KEY] = C_PICKUP
+            context.user_data[CLIENT_STATE_KEY] = C_CONFIRM
 
             await ui_render(
                 context,
                 uid,
-                "📍 Укажите адрес забора.\nАдрес нужно написать текстом и на корейском языке."
+                render_order_summary_for_confirm(d),
+                reply_markup=kb_confirm_order()
             )
             return
 
-        if S == C_PICKUP:
+        if S_client == C_PICKUP:
             if not is_korean_address(text):
                 await ui_render(
                     context,
@@ -2575,7 +2608,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        if S == C_DROP:
+        if S_client == C_DROP:
             if not is_korean_address(text):
                 await ui_render(
                     context,
@@ -2592,14 +2625,6 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             log.info(f"ROUTE CHECK from='{pickup}' to='{dropoff}'")
 
-            # --- NAVER TEST: только геокод pickup ---
-            try:
-                log.info("NAVER GEOCODE REQUEST (pickup)")
-                coords = naver_geocode(pickup)
-                log.info(f"NAVER GEOCODE RESPONSE (pickup): {coords}")
-            except Exception as e:
-                log.exception("NAVER GEOCODE ERROR")
-
             context.user_data[CLIENT_STATE_KEY] = C_DOOR
 
             if SHEETS:
@@ -2613,7 +2638,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        if S == C_DOOR:
+        if S_client == C_DOOR:
             d["door_code"] = text
             context.user_data["draft_order"] = d
             context.user_data[CLIENT_STATE_KEY] = C_TYPE
@@ -2627,21 +2652,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        if S == C_PRICE_RECOMMENDED:
-            # пока без расчёта, просто продолжаем флоу
-            context.user_data[CLIENT_STATE_KEY] = C_DOOR
-
-            await ui_render(
-                context,
-                update.effective_chat.id,
-                "🔒 Если нужен код подъезда или домофона, напишите его.\n"
-                "Если кода нет, нажмите кнопку ниже.",
-                reply_markup=kb_door_code()
-            )
-            return
-
-
-        if S == C_TYPE_OTHER:
+        
+        if S_client == C_TYPE_OTHER:
             if not text:
                 await ui_render(
                     context,
@@ -2657,11 +2669,12 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await ui_render(
                     context,
                     update.effective_chat.id,
-                    "Когда нужна доставка?."
-                )
+                    "Когда нужна доставка?",
+                    reply_markup=kb_delivery_time()
+            )
             return
 
-        if S == C_TIME_CUSTOM:
+        if S_client == C_TIME_CUSTOM:
             if not text:
                 await ui_render(
                     context,
@@ -2669,6 +2682,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "Напишите желаемое время доставки."
                 )
                 return
+            d["delivery_time_type"] = "custom"
             d["delivery_time_text"] = text
             context.user_data["draft_order"] = d
             context.user_data[CLIENT_STATE_KEY] = C_CONTACT
@@ -2677,11 +2691,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await ui_render(
                     context,
                     update.effective_chat.id,
-                    "Укажите адрес получателя. Имя, телефон или Telegram."
-                )
+                    "Укажите контакт получателя.\nИмя и телефон или Telegram."
+            )
             return
 
-        if S == C_CONTACT:
+        if S_client == C_CONTACT:
             if not text:
                 await ui_render(
                     context,
@@ -2693,20 +2707,18 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             d["recipient_contact_text"] = text
             context.user_data["draft_order"] = d
 
-            context.user_data[CLIENT_STATE_KEY] = C_CONFIRM
-
+            # шаг 1: показываем рекомендацию (пока заглушка)
             context.user_data[CLIENT_STATE_KEY] = C_PRICE_FINAL
 
             await ui_render(
                 context,
                 uid,
-                "💰 Укажите цену доставки в вонах.\nРекомендованная стоимость будет показана."
+                "💰 Не удалось рассчитать маршрут. Укажите цену вручную (в вонах)."
             )
+            return
 
-        await ui_render(context, uid, "Что вы хотите сделать?", reply_markup=kb_client_menu())
-        return
-
-    await show_welcome(update.effective_chat, context)
+        
+    return
 
 
 # =========================
@@ -2780,7 +2792,7 @@ async def on_startup(app: Application):
                 door_code=o.get("door_code", ""),
 
                 delivery_type=o.get("delivery_type", ""),
-                delivery_type_other_text="",
+                delivery_type_other_text=o.get("delivery_type_other_text", ""),
                 delivery_time_type=o.get("delivery_time_type", ""),
                 delivery_time_text=o.get("delivery_time_text", ""),
 
