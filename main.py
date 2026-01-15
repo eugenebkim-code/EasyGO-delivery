@@ -29,6 +29,7 @@ import re
 import json
 import asyncio
 import logging
+import requests
 from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
@@ -105,6 +106,7 @@ COURIER_STATE_KEY = "courier_state"
 # client states
 C_NONE = "C_NONE"
 C_PRICE_CUSTOM = "C_PRICE_CUSTOM"
+C_PRICE_FINAL = "C_PRICE_FINAL"
 C_PICKUP = "C_PICKUP"
 C_DROP = "C_DROP"
 C_PRICE_RECOMMENDED = "C_PRICE_RECOMMENDED"
@@ -2155,25 +2157,17 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "client:new_order":
-        if context.user_data.get(USER_LOCATION_KEY) != LOC_DUNPO:
-            await ui_render(
-                context,
-                uid,
-                "Выберите вариант доставки:",
-                reply_markup=kb_client_price_choice()
-            )
-            return
-
-        context.user_data[CLIENT_STATE_KEY] = C_NONE
+        # начинаем заказ сразу с адреса забора
+        context.user_data[CLIENT_STATE_KEY] = C_PICKUP
         context.user_data["draft_order"] = {}
+
         if SHEETS:
-            SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_START_PRICE_CHOICE")
+            SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_START_PICKUP")
 
         await ui_render(
             context,
             uid,
-            "Выберите вариант доставки:",
-            reply_markup=kb_client_price_choice()
+            "📍 Укажите адрес забора.\nАдрес нужно написать текстом на корейском языке."
         )
         return
 
@@ -2519,6 +2513,29 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
         return
 
+    if S == C_PRICE_FINAL:
+        price = parse_price_krw(text)
+        if price is None:
+            await ui_render(
+                context,
+                uid,
+                "Введите сумму числом. Например: 12000"
+            )
+            return
+
+        d["price_krw"] = price
+        context.user_data["draft_order"] = d
+        context.user_data[CLIENT_STATE_KEY] = C_CONFIRM
+
+        await ui_render(
+            context,
+            uid,
+            render_order_summary_for_confirm(d),
+            reply_markup=kb_confirm_order()
+        )
+        return
+
+
     if role == ROLE_CLIENT:
         S = context.user_data.get(CLIENT_STATE_KEY, C_NONE)
         d = context.user_data.get("draft_order", {})
@@ -2579,18 +2596,29 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             d["drop_address_ko"] = text
             context.user_data["draft_order"] = d
 
-            log.info(
-                "ROUTE CHECK from='%s' to='%s'",
-                d.get("pickup_address_ko"),
-                d.get("drop_address_ko"),
-            )
+            pickup = d.get("pickup_address_ko")
+            dropoff = d.get("drop_address_ko")
 
-            context.user_data[CLIENT_STATE_KEY] = C_PRICE_RECOMMENDED
+            log.info(f"ROUTE CHECK from='{pickup}' to='{dropoff}'")
+
+            # --- NAVER TEST: только геокод pickup ---
+            try:
+                log.info("NAVER GEOCODE REQUEST (pickup)")
+                coords = naver_geocode(pickup)
+                log.info(f"NAVER GEOCODE RESPONSE (pickup): {coords}")
+            except Exception as e:
+                log.exception("NAVER GEOCODE ERROR")
+
+            context.user_data[CLIENT_STATE_KEY] = C_DOOR
+
+            if SHEETS:
+                SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_STEP_DROP")
 
             await ui_render(
                 context,
                 update.effective_chat.id,
-                "🔍 Проверяю маршрут и расстояние..."
+                "🔒 Если нужен код подъезда или домофона, напишите его.\nЕсли кода нет, нажмите кнопку ниже.",
+                reply_markup=kb_door_code()
             )
             return
 
@@ -2670,16 +2698,23 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "Укажите контакт получателя.\nИмя и телефон или Telegram."
                 )
                 return
+
             d["recipient_contact_text"] = text
             context.user_data["draft_order"] = d
-            context.user_data[CLIENT_STATE_KEY] = C_CONFIRM
+
+            # ➜ следующий шаг — расчет и ввод цены
+            context.user_data[CLIENT_STATE_KEY] = C_PRICE_FINAL
+
             if SHEETS:
                 SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_STEP_CONTACT")
+
             await ui_render(
                 context,
                 update.effective_chat.id,
-                render_order_summary_for_confirm(d),
-                reply_markup=kb_confirm_order()
+                (
+                    "💰 Сейчас мы рассчитаем рекомендованную стоимость доставки.\n"
+                    "Вы сможете согласиться с ней или указать свою цену."
+                )
             )
             return
 
