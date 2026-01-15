@@ -771,15 +771,21 @@ def kb_courier_menu_pending() -> InlineKeyboardMarkup:
 
 
 def kb_courier_menu_approved(courier_id: int):
-    rows = []
     active = get_active_order_for_courier(courier_id)
 
     if active:
-        rows.append([
-            InlineKeyboardButton("📦 Активный заказ", callback_data="courier:active_order")
-        ])
+        rows = [
+            [InlineKeyboardButton("📦 Активный заказ", callback_data="courier:active_order")]
+        ]
+    else:
+        rows = [
+            [InlineKeyboardButton("📋 Текущие заказы", callback_data="courier:orders")]
+        ]
 
-    rows.append([InlineKeyboardButton("🔁 Сменить роль", callback_data="role:reset")])
+    rows.append(
+        [InlineKeyboardButton("🔁 Сменить роль", callback_data="role:reset")]
+    )
+
     return InlineKeyboardMarkup(rows)
 
 def kb_active_order():
