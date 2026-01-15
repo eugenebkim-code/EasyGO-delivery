@@ -1119,7 +1119,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if SHEETS and update.effective_user:
         SHEETS.log_event(update.effective_user.id, ROLE_UNKNOWN, "START_CMD")
 
-    await ui_send(
+    await ui_render(
         context,
         update.effective_chat.id,
         (
@@ -1138,8 +1138,9 @@ async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if SHEETS:
         SHEETS.log_event(update.effective_user.id, role_for_log(context), "ADMIN_OPEN")
 
-    await tg_retry(lambda: update.effective_chat.send_message(
-        "🛠 Панель администратора",
+    await tg_retry(lambda: context.bot.send_message(
+        chat_id=update.effective_chat.id,
+        text="🛠 Панель администратора",
         reply_markup=kb_admin_menu()
     ))
 
@@ -1800,7 +1801,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data.pop("draft_order", None)
         if SHEETS:
             SHEETS.log_event(uid, ROLE_CLIENT, "ROLE_PICKED")
-        await ui_send(
+        await ui_render(
             context,
             uid,
             "Что вы хотите сделать?",
@@ -2329,7 +2330,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if S == C_TIME_CUSTOM:
             if not text:
-                aawait ui_render(
+                await ui_render(
                     context,
                     update.effective_chat.id,
                     "Напишите желаемое время доставки."
@@ -2375,18 +2376,22 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 async def on_startup(app: Application):
     global SHEETS
-    service = build_sheets_service()
-    SHEETS = SheetsStore(service, SHEET_ID)
-    SHEETS.ensure_structure()
-    SHEETS.warm_cache()
 
     try:
+        # --- Sheets init ---
+        service = build_sheets_service()
+        SHEETS = SheetsStore(service, SHEET_ID)
+        SHEETS.ensure_structure()
+        SHEETS.warm_cache()
+
+        # --- Load couriers ---
         COURIERS.clear()
         for c in SHEETS.load_all_couriers():
             try:
                 cid = int(str(c.get("courier_tg_id", "")).strip())
             except Exception:
                 continue
+
             COURIERS[cid] = CourierProfile(
                 courier_tg_id=cid,
                 username=c.get("username", ""),
@@ -2399,19 +2404,23 @@ async def on_startup(app: Application):
                 rejected_at=c.get("rejected_at", ""),
             )
 
+        # --- Load orders ---
         ORDERS.clear()
         for o in SHEETS.load_all_orders():
             oid = str(o.get("order_id", "")).strip()
             if not oid:
                 continue
+
             try:
                 price = int(str(o.get("price_krw", "")).strip() or "0")
             except Exception:
                 price = 0
+
             try:
                 client_id = int(str(o.get("client_tg_id", "")).strip() or "0")
             except Exception:
                 client_id = 0
+
             try:
                 courier_id = int(str(o.get("courier_tg_id", "")).strip() or "0")
             except Exception:
@@ -2456,9 +2465,10 @@ async def on_startup(app: Application):
             "Sheets ready. Last order id: %s | couriers: %s | orders: %s",
             SHEETS.last_order_num, len(COURIERS), len(ORDERS)
         )
-    except Exception as e:
-        log.warning("Startup load from Sheets failed: %s", e)
-        log.info("Sheets ready. Last order id: %s", SHEETS.last_order_num)
+
+    except Exception:
+        log.exception("FATAL startup error")
+        raise
 
 
 # =========================
