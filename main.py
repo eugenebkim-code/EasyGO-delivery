@@ -2574,7 +2574,9 @@ def main():
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("admin", admin_cmd))
     app.add_handler(CallbackQueryHandler(on_callback))
-    app.add_handler(MessageHandler(filters.ALL, on_message))
+    app.add_handler(
+        MessageHandler(filters.TEXT | filters.PHOTO, on_message)
+    )
 
     log.info("Bot starting...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
