@@ -107,6 +107,7 @@ C_NONE = "C_NONE"
 C_PRICE_CUSTOM = "C_PRICE_CUSTOM"
 C_PICKUP = "C_PICKUP"
 C_DROP = "C_DROP"
+C_PRICE_RECOMMENDED = "C_PRICE_RECOMMENDED"
 C_DOOR = "C_DOOR"
 C_TYPE = "C_TYPE"
 C_TYPE_OTHER = "C_TYPE_OTHER"
@@ -1831,6 +1832,28 @@ async def handle_client_delete_problem(query, context: ContextTypes.DEFAULT_TYPE
 
     await ui_render(context, uid, "🗑 Заказ удален.", reply_markup=kb_client_menu())
 
+# =========================
+# NAVER
+# =========================
+
+def naver_geocode(address: str):
+    url = "https://naveropenapi.apigw.ntruss.com/map-geocode/v2/geocode"
+    headers = {
+        "X-NCP-APIGW-API-KEY-ID": os.getenv("NAVER_CLIENT_ID"),
+        "X-NCP-APIGW-API-KEY": os.getenv("NAVER_CLIENT_SECRET"),
+    }
+    params = {"query": address}
+
+    r = requests.get(url, headers=headers, params=params, timeout=5)
+    r.raise_for_status()
+    data = r.json()
+
+    if not data.get("addresses"):
+        return None
+
+    a = data["addresses"][0]
+    return float(a["y"]), float(a["x"])  # lat, lon
+
 
 # =========================
 # MAIN CALLBACK HANDLER
@@ -2552,16 +2575,22 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "Пожалуйста, укажите адрес на корейском языке. Это нужно для навигатора."
                 )
                 return
+
             d["drop_address_ko"] = text
             context.user_data["draft_order"] = d
-            context.user_data[CLIENT_STATE_KEY] = C_DOOR
-            if SHEETS:
-                SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_STEP_DROP")
+
+            log.info(
+                "ROUTE CHECK from='%s' to='%s'",
+                d.get("pickup_address_ko"),
+                d.get("drop_address_ko"),
+            )
+
+            context.user_data[CLIENT_STATE_KEY] = C_PRICE_RECOMMENDED
+
             await ui_render(
                 context,
                 update.effective_chat.id,
-                "🔒 Если нужен код подъезда или домофона, напишите его.\nЕсли кода нет, нажмите кнопку ниже.",
-                reply_markup=kb_door_code()
+                "🔍 Проверяю маршрут и расстояние..."
             )
             return
 
@@ -2578,6 +2607,20 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=kb_delivery_type()
             )
             return
+
+        if S == C_PRICE_RECOMMENDED:
+            # пока без расчёта, просто продолжаем флоу
+            context.user_data[CLIENT_STATE_KEY] = C_DOOR
+
+            await ui_render(
+                context,
+                update.effective_chat.id,
+                "🔒 Если нужен код подъезда или домофона, напишите его.\n"
+                "Если кода нет, нажмите кнопку ниже.",
+                reply_markup=kb_door_code()
+            )
+            return
+
 
         if S == C_TYPE_OTHER:
             if not text:
