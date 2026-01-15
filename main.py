@@ -1219,7 +1219,7 @@ async def handle_admin_callbacks(query, context: ContextTypes.DEFAULT_TYPE, data
 
         items.sort(key=lambda o: int(o.order_id), reverse=True)
         for o in items[:10]:
-            await tg_retry(lambda t=render_admin_order_line(o): query.message.reply_text(t))
+            await ui_render(context, uid, render_admin_order_line(o))
         return
 
     if data == "admin:apps":
@@ -1235,9 +1235,12 @@ async def handle_admin_callbacks(query, context: ContextTypes.DEFAULT_TYPE, data
                 f"Транспорт: {c.transport}\n"
                 f"ID: {c.courier_tg_id}"
             )
-            await tg_retry(lambda t=text, cid=c.courier_tg_id: query.message.reply_text(
-                t, reply_markup=kb_admin_app_decision(cid)
-            ))
+            await ui_render(
+                context,
+                uid,
+                text,
+                reply_markup=kb_admin_app_decision(c.courier_tg_id)
+            )
         return
 
     if data == "admin:approved":
@@ -1390,14 +1393,13 @@ async def handle_take_order(query, context: ContextTypes.DEFAULT_TYPE, courier_i
 
     active = get_active_order_for_courier(courier_id)
     if active:
-        await ui_render(context, uid, 
+        await ui_render(context, courier_id,
             f"⚠️ У вас уже есть активный заказ #{active.order_id}.\n"
             "Сначала завершите его или откройте через меню.",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("📦 Заказ на руках", callback_data="courier:active_order")]
             ])
         )
-        return
 
     async with ORDER_LOCK:
         order = ORDERS.get(order_id)
@@ -1421,11 +1423,6 @@ async def handle_take_order(query, context: ContextTypes.DEFAULT_TYPE, courier_i
         if SHEETS:
             SHEETS.update_order(asdict(order))
             SHEETS.log_event(courier_id, ROLE_COURIER, "ORDER_TAKEN", order_id=order_id)
-
-    await tg_retry(lambda: query.edit_message_text(
-        text=render_order_taken_text(order),
-        reply_markup=kb_order_taken(order.order_id)
-    ))
 
     await ui_render(
         context,
@@ -1493,8 +1490,8 @@ async def handle_bad_address(query, context: ContextTypes.DEFAULT_TYPE, courier_
     except Exception:
         pass
 
-    await ui_render(context, uid, 
-        f"⚠️ Ок, заказ #{order.order_id} помечен как проблемный и скрыт из доступных."
+    await ui_render(context, courier_id,
+        f"⚠️ Ок, заказ #{order.order_id} помечен как проблемный..."
     )
 
     await notify_order_bad_address(context, order)
@@ -1529,13 +1526,13 @@ async def handle_in_progress_clicked(query, context: ContextTypes.DEFAULT_TYPE, 
             SHEETS.update_order(asdict(order))
             SHEETS.log_event(courier_id, ROLE_COURIER, "ORDER_IN_PROGRESS", order_id=order_id)
 
-    await tg_retry(lambda: query.edit_message_text(
-        text=(
-            "🚗 Статус обновлен: выезжаю/в пути.\n\n"
-            "Если доставили, нажмите кнопку ниже."
-        ),
+    await ui_render(
+        context,
+        courier_id,
+        "🚗 Статус обновлен: выезжаю/в пути.\n\n"
+        "Если доставили, нажмите кнопку ниже.",
         reply_markup=kb_order_in_progress(order.order_id)
-    ))
+    )
 
     try:
         await tg_retry(lambda: context.bot.send_message(
@@ -1809,6 +1806,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Что вы хотите сделать?",
             reply_markup=kb_client_menu()
         )
+        return
 
     if data == "role:courier":
         context.user_data[USER_ROLE_KEY] = ROLE_COURIER
@@ -1996,22 +1994,37 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("client:type:"):
-        t = data.split(":")[-1]
+        delivery_type = data.split(":")[-1]
+
         d = context.user_data.get("draft_order", {})
-        d["delivery_type"] = t
+        d["delivery_type"] = delivery_type
         context.user_data["draft_order"] = d
 
-        if t == "other":
+        if delivery_type == "other":
             context.user_data[CLIENT_STATE_KEY] = C_TYPE_OTHER
+
             if SHEETS:
                 SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_STEP_TYPE_OTHER")
-            await ui_render(context, uid, "Коротко опишите, что нужно доставить.")
+
+            await ui_render(
+                context,
+                uid,
+                "Коротко опишите, что нужно доставить."
+            )
             return
 
+        # обычные типы доставки
         context.user_data[CLIENT_STATE_KEY] = C_TIME
+
         if SHEETS:
-            SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_STEP_TYPE", meta=t)
-        await ui_render(context, uid, "Когда нужна доставка?", reply_markup=kb_delivery_time())
+            SHEETS.log_event(uid, ROLE_CLIENT, "ORDER_STEP_TYPE", meta=delivery_type)
+
+        await ui_render(
+            context,
+            uid,
+            "Когда нужна доставка?",
+            reply_markup=kb_delivery_time()
+        )
         return
 
     if data.startswith("client:time:"):
