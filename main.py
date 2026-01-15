@@ -1837,7 +1837,7 @@ async def handle_courier_orders(query, context: ContextTypes.DEFAULT_TYPE):
     rows = []
 
     for o in orders:
-        lines.append(f"Заказ #{o.order_id} • {o.price}")
+        lines.append(f"Заказ #{o.order_id}")
         rows.append([
             InlineKeyboardButton(
                 f"Взять #{o.order_id}",
