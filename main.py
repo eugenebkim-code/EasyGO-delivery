@@ -770,15 +770,22 @@ def kb_courier_menu_pending() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔁 Сменить роль", callback_data="role:reset")]])
 
 
-def kb_courier_menu_approved(courier_id: int) -> InlineKeyboardMarkup:
+def kb_courier_menu_approved(courier_id: int):
     rows = []
     active = get_active_order_for_courier(courier_id)
+
     if active:
-        rows.append([InlineKeyboardButton("📦 Заказ на руках", callback_data="courier:active_order")])
-    rows.append([InlineKeyboardButton("📋 Текущие заявки", callback_data="courier:current_orders")])
+        rows.append([
+            InlineKeyboardButton("📦 Активный заказ", callback_data="courier:active_order")
+        ])
+
     rows.append([InlineKeyboardButton("🔁 Сменить роль", callback_data="role:reset")])
     return InlineKeyboardMarkup(rows)
 
+def kb_active_order():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📦 Активный заказ", callback_data="courier:active_order")]
+    ])
 
 def kb_door_code() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("Нет кода", callback_data="client:door_none")]])
@@ -1425,6 +1432,7 @@ def render_orders_list(items: List[Order], limit: int = 20) -> str:
 # TAKE ORDER + IN PROGRESS + COMPLETE + CANCEL + PROBLEM
 # =========================
 async def handle_take_order(query, context: ContextTypes.DEFAULT_TYPE, courier_id: int, order_id: str):
+    # курьер должен быть одобрен
     if not courier_is_approved(courier_id):
         await ui_render(
             context,
@@ -1433,37 +1441,42 @@ async def handle_take_order(query, context: ContextTypes.DEFAULT_TYPE, courier_i
         )
         return
 
+    # ❗ жесткое правило: 1 активный заказ
     active = get_active_order_for_courier(courier_id)
     if active:
-        await ui_render(context, courier_id,
-            f"⚠️ У вас уже есть активный заказ #{active.order_id}.\n"
-            "Сначала завершите его или откройте через меню.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📦 Заказ на руках", callback_data="courier:active_order")]
-            ])
+        await ui_render(
+            context,
+            courier_id,
+            (
+                f"⚠️ У вас уже есть активный заказ #{active.order_id}.\n"
+                "Сначала завершите его или откройте через меню."
+            ),
+            reply_markup=kb_active_order()
         )
+        return
 
     async with ORDER_LOCK:
         order = ORDERS.get(order_id)
         if not order:
-            await ui_render(context, uid, "Заказ не найден.")
+            await ui_render(context, courier_id, "Заказ не найден.")
             return
+
         if order.status != ORDER_NEW:
-            await ui_render(context, uid, "Этот заказ уже недоступен.")
+            await ui_render(context, courier_id, "Этот заказ уже недоступен.")
             if SHEETS:
-                SHEETS.log_event(courier_id, ROLE_COURIER, "TAKE_FAIL_NOT_NEW", order_id=order_id, meta=order.status)
+                SHEETS.log_event(
+                    courier_id,
+                    ROLE_COURIER,
+                    "TAKE_FAIL_NOT_NEW",
+                    order_id=order_id,
+                    meta=order.status
+                )
             return
 
         prof = COURIERS.get(courier_id)
-        order.status = ORDER_TAKEN
-        ORDERS[order_id] = order
 
-        await ui_render(
-            context,
-            courier_id,
-            render_order_taken_text(order),
-            reply_markup=kb_order_taken(order.order_id)
-        )
+        # назначаем заказ курьеру
+        order.status = ORDER_TAKEN
         order.taken_at = now_ts()
         order.courier_tg_id = courier_id
         order.courier_name = prof.name if prof else ""
@@ -1472,8 +1485,14 @@ async def handle_take_order(query, context: ContextTypes.DEFAULT_TYPE, courier_i
 
         if SHEETS:
             SHEETS.update_order(asdict(order))
-            SHEETS.log_event(courier_id, ROLE_COURIER, "ORDER_TAKEN", order_id=order_id)
+            SHEETS.log_event(
+                courier_id,
+                ROLE_COURIER,
+                "ORDER_TAKEN",
+                order_id=order_id
+            )
 
+    # ✅ один-единственный UI render
     await ui_render(
         context,
         courier_id,
@@ -1481,17 +1500,7 @@ async def handle_take_order(query, context: ContextTypes.DEFAULT_TYPE, courier_i
         reply_markup=kb_order_taken(order.order_id)
     )
 
-
-    try:
-        await tg_retry(lambda: context.bot.send_message(
-            chat_id=courier_id,
-            text="🛵 Меню курьера обновлено:",
-            reply_markup=kb_courier_menu_approved(courier_id)
-        ))
-    except Exception as e:
-        log.warning("Courier menu send failed: %s", e)
-
-    
+    # уведомления админам (вне UI)
     for admin_id in ADMIN_IDS:
         try:
             await tg_retry(lambda aid=admin_id: context.bot.send_message(
