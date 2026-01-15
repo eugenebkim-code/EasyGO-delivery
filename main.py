@@ -778,7 +778,8 @@ def kb_courier_menu_approved(courier_id: int):
         ]
     else:
         rows = [
-            [InlineKeyboardButton("📊 Мои заказы", callback_data="courier:stats")]
+            [InlineKeyboardButton("📋 Текущие заявки", callback_data="courier:orders")],
+            [InlineKeyboardButton("📊 Статистика", callback_data="courier:stats")]
         ]
 
     rows.append(
@@ -2047,11 +2048,6 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("picked:"):
         order_id = data.split(":", 1)[1]
         await handle_picked_up(query, context, uid, order_id)
-        return
-
-
-    if data == "courier:current_orders":
-        await show_current_orders_for_courier(context, uid)
         return
 
     if data == "courier:stats":
