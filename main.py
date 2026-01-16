@@ -1003,8 +1003,8 @@ def render_order_offer_text(order: Order) -> str:
         f"📦 Тип: {dtype}\n"
         f"🕒 Время: {tline}\n"
         f"💰 Цена: {order.price_krw} вон\n\n"
-        f"📍 Адрес забора:\n{order.pickup_address_ko}\n\n"
-        f"🏁 Адрес доставки:\n{order.drop_address_ko}"
+        f"📍 Адрес забора:\n`{order.pickup_address_ko}`\n\n"
+        f"🏁 Адрес доставки:\n`{order.drop_address_ko}`"
     )
 
 
@@ -1014,8 +1014,8 @@ def render_order_taken_text(order: Order) -> str:
         "✅ Вы взяли заказ.\n\n"
         f"📦 Заказ #{order.order_id}\n"
         f"💰 Цена: {order.price_krw} вон\n\n"
-        f"📍 Адрес забора:\n{order.pickup_address_ko}\n\n"
-        f"🏁 Адрес доставки:\n{order.drop_address_ko}\n\n"
+        f"📍 Адрес забора:\n`{order.pickup_address_ko}`\n\n"
+        f"🏁 Адрес доставки:\n`{order.drop_address_ko}`\n\n"
         f"🔒 Код подъезда:\n{door}\n\n"
         f"📞 Контакт:\n{order.recipient_contact_text}\n\n"
         "Свяжитесь с клиентом и уточните детали.\n"
@@ -1214,7 +1214,8 @@ async def handle_courier_orders(query, context: ContextTypes.DEFAULT_TYPE):
         await tg_retry(lambda order=o: context.bot.send_message(
             chat_id=uid,
             text=render_order_offer_text(order),
-            reply_markup=kb_order_offer(order)
+            reply_markup=kb_order_offer(order),
+            parse_mode="Markdown",
         ))
 
 async def _send_courier_naver_warning_once(context: ContextTypes.DEFAULT_TYPE, courier_id: int):
@@ -1254,7 +1255,8 @@ async def notify_new_order(context: ContextTypes.DEFAULT_TYPE, order: Order):
             await tg_retry(lambda ccid=cid: context.bot.send_message(
                 chat_id=ccid,
                 text=text,
-                reply_markup=kb_order_offer(order)
+                reply_markup=kb_order_offer(order),
+                parse_mode="Markdown",
             ))
         except Exception as e:
             log.warning("Courier notify failed: %s", e)
@@ -1430,7 +1432,8 @@ async def show_current_orders_for_courier(context: ContextTypes.DEFAULT_TYPE, ch
             await tg_retry(lambda order=o: context.bot.send_message(
                 chat_id=chat_id,
                 text=render_order_offer_text(order),
-                reply_markup=kb_order_offer(order)
+                reply_markup=kb_order_offer(order),
+                parse_mode="Markdown",
             ))
         except BadRequest as e:
             # чтобы не "висло" на одной битой отправке
@@ -2116,12 +2119,15 @@ def calc_recommended_price_krw(pickup_addr: str, drop_addr: str) -> Optional[int
         km,
         source
     )
+    def round_krw_1000(value: int) -> int:
+        return int(math.ceil(value / 1000.0) * 1000)
 
-    price = int(round(km * PRICE_PER_KM_KRW))
-    log.info("PRICE RESULT | %s KRW", price)
-
+    raw_price = int(round(km * PRICE_PER_KM_KRW))
+    price = round_krw_1000(raw_price)
+    log.info("PRICE FINAL | raw=%s | rounded=%s", raw_price, price)
     return price
 
+    
 # =========================
 # MAIN CALLBACK HANDLER
 # =========================
