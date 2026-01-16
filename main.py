@@ -1875,6 +1875,21 @@ async def handle_client_delete_problem(query, context: ContextTypes.DEFAULT_TYPE
 # GOOGLE GEOCODE & Distance Matrix
 # =========================
 
+import math
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    R = 6371.0  # Earth radius in km
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+
+    a = (
+        math.sin(dphi / 2) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
 
 def google_geocode(address: str) -> Optional[tuple[float, float]]:
     if not GOOGLE_MAPS_API_KEY:
@@ -2085,14 +2100,21 @@ def calc_recommended_price_krw(pickup_addr: str, drop_addr: str) -> Optional[int
         log.warning("PRICE CALC FAIL | geocode failed | a=%s b=%s", a, b)
         return None
 
-    km = google_distance_km(a[0], a[1], b[0], b[1])
-    if km is None:
-        log.warning("PRICE CALC FAIL | distance failed")
-        return None
+    km = google_distance_km(lat1, lng1, lat2, lng2)
+    source = "google"
 
-    price = int(round(km * GOOGLE_PRICE_PER_KM, -2))
-    log.info("PRICE CALC OK | km=%.2f | price=%s", km, price)
-    return price
+    if km is None:
+        base_km = haversine_km(lat1, lng1, lat2, lng2)
+        km = base_km * 1.5
+        source = "haversine_adjusted"
+
+    log.info(
+        "DISTANCE RESULT | km=%.2f | source=%s",
+        km,
+        source
+    )
+
+price = int(round(km * 1200))
 
 # =========================
 # MAIN CALLBACK HANDLER
@@ -3034,7 +3056,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     context,
                     uid,
                     (
-                        f"💰 Рекомендованная цена: {recommended} вон\n"
+                        f"💰 Рекомендованная цена: {recommended} ~вон\n"
                         f"(расчет: {PRICE_PER_KM_KRW} вон за км)\n\n"
                         "Принять эту цену или ввести свою?"
                     ),
