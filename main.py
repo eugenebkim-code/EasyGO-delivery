@@ -84,6 +84,7 @@ for part in ADMIN_IDS_RAW.split(","):
         ADMIN_IDS.add(int(part))
 
 DEFAULT_PRICE_KRW = 4000
+PRICE_PER_KM_KRW = 1200
 
 LOC_DUNPO = "Dunpo"
 LOC_ASAN = "Asan"
@@ -105,7 +106,8 @@ COURIER_STATE_KEY = "courier_state"
 
 # client states
 C_NONE = "C_NONE"
-C_PRICE_FINAL = "C_PRICE_FINAL"
+C_PRICE_RECOMMEND = "C_PRICE_RECOMMEND"   # показ рекомендованной цены + выбор
+C_PRICE_FINAL = "C_PRICE_FINAL"           # ручной ввод цены
 C_PICKUP = "C_PICKUP"
 C_DROP = "C_DROP"
 C_PRICE_ZONE = "C_PRICE_ZONE"
@@ -757,6 +759,11 @@ def kb_client_price_choice() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🌐 Другие районы (ввести цену)", callback_data="client:price:custom")],
     ])
 
+def kb_client_price_recommend() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Принять рекомендованную цену", callback_data="client:price:accept_recommended")],
+        [InlineKeyboardButton("✍️ Ввести цену вручную", callback_data="client:price:manual")],
+    ])
 
 def kb_courier_menu_not_applied() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
@@ -1883,6 +1890,69 @@ def naver_geocode(address: str):
     a = data["addresses"][0]
     return float(a["y"]), float(a["x"])  # lat, lon
 
+def naver_route_distance_km(start_lat: float, start_lon: float, goal_lat: float, goal_lon: float) -> Optional[float]:
+    """
+    Directions 5 API: distance meters -> km
+    Док: summary.distance (meters) в route.traoptimal[0].summary.distance
+    """
+    url = "https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving"
+    headers = {
+        "X-NCP-APIGW-API-KEY-ID": os.getenv("NAVER_CLIENT_ID"),
+        "X-NCP-APIGW-API-KEY": os.getenv("NAVER_CLIENT_SECRET"),
+    }
+
+    if not headers["X-NCP-APIGW-API-KEY-ID"] or not headers["X-NCP-APIGW-API-KEY"]:
+        return None
+
+    params = {
+        "start": f"{start_lon},{start_lat}",
+        "goal": f"{goal_lon},{goal_lat}",
+        "option": "traoptimal",
+    }
+
+    r = requests.get(url, headers=headers, params=params, timeout=6)
+    r.raise_for_status()
+    data = r.json()
+
+    route = data.get("route") or {}
+    arr = route.get("traoptimal") or []
+    if not arr:
+        return None
+
+    summary = (arr[0] or {}).get("summary") or {}
+    dist_m = summary.get("distance")
+    if dist_m is None:
+        return None
+
+    try:
+        km = float(dist_m) / 1000.0
+    except Exception:
+        return None
+
+    return km
+
+def calc_recommended_price_krw(pickup_addr: str, drop_addr: str) -> Optional[int]:
+    try:
+        p = naver_geocode(pickup_addr)
+        g = naver_geocode(drop_addr)
+        if not p or not g:
+            return None
+
+        plat, plon = p
+        glat, glon = g
+
+        km = naver_route_distance_km(plat, plon, glat, glon)
+        if km is None:
+            return None
+
+        price = int(round(km * PRICE_PER_KM_KRW))
+        # минимальная защита от 0
+        if price < 1000:
+            price = 1000
+        return price
+    except Exception as e:
+        log.warning("calc_recommended_price_krw failed: %s", e)
+        return None
 
 # =========================
 # MAIN CALLBACK HANDLER
@@ -2238,6 +2308,40 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📍 Укажите адрес забора.\nАдрес нужно написать текстом и на корейском языке."
         )
         return
+
+    if data == "client:price:accept_recommended":
+        if context.user_data.get(CLIENT_STATE_KEY) != C_PRICE_RECOMMEND:
+            return
+
+        d = context.user_data.get("draft_order", {})
+        rec = int(d.get("recommended_price_krw") or 0)
+        if rec <= 0:
+            # если вдруг пропало - уходим на ручной ввод
+            context.user_data[CLIENT_STATE_KEY] = C_PRICE_FINAL
+            await ui_render(context, uid, "Введите цену вручную (в вонах).")
+            return
+
+        d["price_krw"] = rec
+        context.user_data["draft_order"] = d
+        context.user_data[CLIENT_STATE_KEY] = C_CONFIRM
+
+        await ui_render(
+            context,
+            uid,
+            render_order_summary_for_confirm(d),
+            reply_markup=kb_confirm_order()
+        )
+        return
+
+    if data == "client:price:manual":
+        if context.user_data.get(CLIENT_STATE_KEY) != C_PRICE_RECOMMEND:
+            return
+
+        context.user_data[CLIENT_STATE_KEY] = C_PRICE_FINAL
+        await ui_render(context, uid, "Введите цену вручную (в вонах). Например: 12000")
+        return
+
+
 
     if data == "client:door_none":
         if context.user_data.get(CLIENT_STATE_KEY) != C_DOOR:
@@ -2775,9 +2879,31 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
-            # Other районы — ввод цены
-            context.user_data[CLIENT_STATE_KEY] = C_PRICE_FINAL
+            # Other районы - сначала показываем рекомендованную цену
+            recommended = calc_recommended_price_krw(
+                d.get("pickup_address_ko", ""),
+                d.get("drop_address_ko", "")
+            )
 
+            if recommended:
+                d["recommended_price_krw"] = recommended
+                context.user_data["draft_order"] = d
+                context.user_data[CLIENT_STATE_KEY] = C_PRICE_RECOMMEND
+
+                await ui_render(
+                    context,
+                    uid,
+                    (
+                        f"💰 Рекомендованная цена: {recommended} вон\n"
+                        f"(расчет: {PRICE_PER_KM_KRW} вон за км)\n\n"
+                        "Принять эту цену или ввести свою?"
+                    ),
+                    reply_markup=kb_client_price_recommend()
+                )
+                return
+
+            # fallback - как было раньше
+            context.user_data[CLIENT_STATE_KEY] = C_PRICE_FINAL
             await ui_render(
                 context,
                 uid,
