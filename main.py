@@ -730,20 +730,18 @@ def get_active_order_for_courier(courier_id: int) -> Optional["Order"]:
 # UI (KEYBOARDS)
 # =========================
 
-def kb_back_to_start() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⬅️ Назад", callback_data="info:back")]
-    ])
-
-def kb_main_info() -> InlineKeyboardMarkup:
+def kb_main_home() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📜 Правила сервиса", callback_data="info:rules")],
         [InlineKeyboardButton("🧾 Как сделать заказ", callback_data="info:client")],
         [InlineKeyboardButton("🛵 Как принять заказ", callback_data="info:courier")],
+        [InlineKeyboardButton("🚀 Старт", callback_data="start:go")],
     ])
 
-def kb_start() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Старт", callback_data="start:go")]])
+def kb_back_to_start() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️ Назад", callback_data="info:back")]
+    ])
 
 
 def kb_location() -> InlineKeyboardMarkup:
@@ -1187,7 +1185,7 @@ async def show_welcome(chat, context: ContextTypes.DEFAULT_TYPE):
             "EasyGo — локальная служба доставки.\n\n"
             "Перед началом рекомендуется написать /start"
         ),
-        reply_markup=kb_main_info()
+        reply_markup=kb_main_home()
     )
 
     init_user_defaults(context)
@@ -1200,7 +1198,7 @@ async def show_welcome(chat, context: ContextTypes.DEFAULT_TYPE):
             "Чтобы вернуться на главный экран напишите /start.\n"
             "Если Вы заметили ошибку, пожалуйста, сообщите разработчику: @luv2win"
         ),
-        reply_markup=kb_start()
+        reply_markup=kb_main_home()
     )
 
 
@@ -2327,7 +2325,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context,
             uid,
             "Здравствуйте! 👋\nEasyGo — локальная служба доставки.",
-            reply_markup=kb_main_info()
+            reply_markup=kb_main_home()
         )
         return
 
