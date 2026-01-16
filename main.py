@@ -1190,7 +1190,6 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("awaiting_proof_order_id", None)
     
 
-
     if SHEETS and update.effective_user:
         SHEETS.log_visit(
             user_tg_id=update.effective_user.id,
