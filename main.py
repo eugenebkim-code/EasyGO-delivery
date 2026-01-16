@@ -85,6 +85,9 @@ for part in ADMIN_IDS_RAW.split(","):
 
 DEFAULT_PRICE_KRW = 4000
 PRICE_PER_KM_KRW = 1200
+GOOGLE_PRICE_PER_KM = 1200
+GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
+
 
 LOC_DUNPO = "Dunpo"
 LOC_ASAN = "Asan"
@@ -1869,6 +1872,67 @@ async def handle_client_delete_problem(query, context: ContextTypes.DEFAULT_TYPE
     await ui_render(context, uid, "🗑 Заказ удален.", reply_markup=kb_client_menu())
 
 # =========================
+# GOOGLE GEOCODE & Distance Matrix
+# =========================
+
+
+def google_geocode(address: str) -> Optional[tuple[float, float]]:
+    if not GOOGLE_MAPS_API_KEY:
+        return None
+
+    url = "https://maps.googleapis.com/maps/api/geocode/json"
+    params = {
+        "address": address,
+        "key": GOOGLE_MAPS_API_KEY,
+    }
+
+    try:
+        r = requests.get(url, params=params, timeout=5)
+        r.raise_for_status()
+        data = r.json()
+    except Exception:
+        return None
+
+    if data.get("status") != "OK":
+        return None
+
+    loc = data["results"][0]["geometry"]["location"]
+    return loc["lat"], loc["lng"]
+
+def google_distance_km(
+    lat1: float, lng1: float,
+    lat2: float, lng2: float,
+) -> Optional[float]:
+
+    if not GOOGLE_MAPS_API_KEY:
+        return None
+
+    url = "https://maps.googleapis.com/maps/api/distancematrix/json"
+    params = {
+        "origins": f"{lat1},{lng1}",
+        "destinations": f"{lat2},{lng2}",
+        "key": GOOGLE_MAPS_API_KEY,
+        "mode": "driving",
+    }
+
+    try:
+        r = requests.get(url, params=params, timeout=5)
+        r.raise_for_status()
+        data = r.json()
+    except Exception:
+        return None
+
+    if data.get("status") != "OK":
+        return None
+
+    el = data["rows"][0]["elements"][0]
+    if el.get("status") != "OK":
+        return None
+
+    meters = el["distance"]["value"]
+    return meters / 1000.0
+
+# =========================
 # NAVER
 # =========================
 
@@ -1971,34 +2035,20 @@ def naver_route_distance_km(
         return None
 
 def calc_recommended_price_krw(pickup_addr: str, drop_addr: str) -> Optional[int]:
+    log.info("PRICE CALC START | pickup=%r | drop=%r", pickup_addr, drop_addr)
 
-    log.info(
-        "PRICE CALC START | pickup='%s' | drop='%s'",
-        pickup_addr,
-        drop_addr,
-    )
-
-    try:
-        p = naver_geocode(pickup_addr)
-        g = naver_geocode(drop_addr)
-        if not p or not g:
-            return None
-
-        plat, plon = p
-        glat, glon = g
-
-        km = naver_route_distance_km(plat, plon, glat, glon)
-        if km is None:
-            return None
-
-        price = int(round(km * PRICE_PER_KM_KRW))
-        # минимальная защита от 0
-        if price < 1000:
-            price = 1000
-        return price
-    except Exception as e:
-        log.warning("calc_recommended_price_krw failed: %s", e)
+    a = google_geocode(pickup_addr)
+    b = google_geocode(drop_addr)
+    if not a or not b:
         return None
+
+    km = google_distance_km(a[0], a[1], b[0], b[1])
+    if km is None:
+        return None
+
+    price = int(round(km * GOOGLE_PRICE_PER_KM, -2))
+    log.info("PRICE CALC OK | km=%.2f | price=%s", km, price)
+    return price
 
 # =========================
 # MAIN CALLBACK HANDLER
