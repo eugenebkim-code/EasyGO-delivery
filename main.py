@@ -1878,7 +1878,10 @@ async def handle_client_delete_problem(query, context: ContextTypes.DEFAULT_TYPE
 
 def google_geocode(address: str) -> Optional[tuple[float, float]]:
     if not GOOGLE_MAPS_API_KEY:
+        log.warning("GOOGLE GEOCODE SKIP: API KEY MISSING")
         return None
+
+    log.info("GOOGLE GEOCODE REQUEST | addr=%r", address)
 
     url = "https://maps.googleapis.com/maps/api/geocode/json"
     params = {
@@ -1888,9 +1891,11 @@ def google_geocode(address: str) -> Optional[tuple[float, float]]:
 
     try:
         r = requests.get(url, params=params, timeout=5)
+        log.info("GOOGLE GEOCODE HTTP %s | %s", r.status_code, r.url)
         r.raise_for_status()
         data = r.json()
-    except Exception:
+    except Exception as e:
+        log.exception("GOOGLE GEOCODE ERROR")
         return None
 
     if data.get("status") != "OK":
@@ -1900,11 +1905,14 @@ def google_geocode(address: str) -> Optional[tuple[float, float]]:
     return loc["lat"], loc["lng"]
 
 def google_distance_km(
-    lat1: float, lng1: float,
-    lat2: float, lng2: float,
+    lat1: float,
+    lng1: float,
+    lat2: float,
+    lng2: float,
 ) -> Optional[float]:
 
     if not GOOGLE_MAPS_API_KEY:
+        log.warning("GOOGLE DISTANCE SKIP: API KEY MISSING")
         return None
 
     url = "https://maps.googleapis.com/maps/api/distancematrix/json"
@@ -1915,22 +1923,56 @@ def google_distance_km(
         "mode": "driving",
     }
 
+    log.info(
+        "GOOGLE DISTANCE REQUEST | %s,%s -> %s,%s",
+        lat1, lng1, lat2, lng2
+    )
+
     try:
         r = requests.get(url, params=params, timeout=5)
+        log.info(
+            "GOOGLE DISTANCE HTTP %s | %s",
+            r.status_code,
+            r.url
+        )
         r.raise_for_status()
         data = r.json()
     except Exception:
+        log.exception("GOOGLE DISTANCE ERROR")
         return None
 
     if data.get("status") != "OK":
+        log.warning(
+            "GOOGLE DISTANCE FAIL | status=%s | body=%s",
+            data.get("status"),
+            data
+        )
         return None
 
-    el = data["rows"][0]["elements"][0]
+    try:
+        el = data["rows"][0]["elements"][0]
+    except Exception:
+        log.warning("GOOGLE DISTANCE BAD STRUCTURE | body=%s", data)
+        return None
+
     if el.get("status") != "OK":
+        log.warning(
+            "GOOGLE DISTANCE ELEMENT FAIL | status=%s | body=%s",
+            el.get("status"),
+            el
+        )
         return None
 
-    meters = el["distance"]["value"]
-    return meters / 1000.0
+    meters = el.get("distance", {}).get("value")
+    if meters is None:
+        log.warning("GOOGLE DISTANCE NO DISTANCE FIELD | body=%s", el)
+        return None
+
+    km = meters / 1000.0
+    log.info("GOOGLE DISTANCE OK | km=%.2f", km)
+    return km
+
+
 
 # =========================
 # NAVER
@@ -2040,10 +2082,12 @@ def calc_recommended_price_krw(pickup_addr: str, drop_addr: str) -> Optional[int
     a = google_geocode(pickup_addr)
     b = google_geocode(drop_addr)
     if not a or not b:
+        log.warning("PRICE CALC FAIL | geocode failed | a=%s b=%s", a, b)
         return None
 
     km = google_distance_km(a[0], a[1], b[0], b[1])
     if km is None:
+        log.warning("PRICE CALC FAIL | distance failed")
         return None
 
     price = int(round(km * GOOGLE_PRICE_PER_KM, -2))
