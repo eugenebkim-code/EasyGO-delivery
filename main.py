@@ -2100,6 +2100,9 @@ def calc_recommended_price_krw(pickup_addr: str, drop_addr: str) -> Optional[int
         log.warning("PRICE CALC FAIL | geocode failed | a=%s b=%s", a, b)
         return None
 
+    lat1, lng1 = a
+    lat2, lng2 = b
+
     km = google_distance_km(lat1, lng1, lat2, lng2)
     source = "google"
 
@@ -2114,7 +2117,10 @@ def calc_recommended_price_krw(pickup_addr: str, drop_addr: str) -> Optional[int
         source
     )
 
-price = int(round(km * 1200))
+    price = int(round(km * PRICE_PER_KM_KRW))
+    log.info("PRICE RESULT | %s KRW", price)
+
+    return price
 
 # =========================
 # MAIN CALLBACK HANDLER
