@@ -1208,6 +1208,9 @@ async def show_welcome(chat, context: ContextTypes.DEFAULT_TYPE):
 # COMMANDS
 # =========================
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    
+    chat = update.effective_chat
+
     init_user_defaults(context)
     context.user_data[USER_ROLE_KEY] = ROLE_UNKNOWN
     context.user_data[USER_LOCATION_KEY] = ""
