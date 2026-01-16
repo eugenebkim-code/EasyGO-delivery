@@ -730,6 +730,19 @@ def get_active_order_for_courier(courier_id: int) -> Optional["Order"]:
 # UI (KEYBOARDS)
 # =========================
 
+def kb_back_home() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️ Назад", callback_data="home:back")]
+    ])
+
+def kb_home_root() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 Старт", callback_data="home:start")],
+        [InlineKeyboardButton("📜 Правила сервиса", callback_data="home:rules")],
+        [InlineKeyboardButton("🧾 Как сделать заказ", callback_data="home:client")],
+        [InlineKeyboardButton("🛵 Как принять заказ", callback_data="home:courier")],
+    ])
+
 def kb_main_home() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📜 Правила сервиса", callback_data="info:rules")],
@@ -1178,45 +1191,31 @@ def init_user_defaults(context: ContextTypes.DEFAULT_TYPE):
 # COMMANDS
 # =========================
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    
     chat = update.effective_chat
 
+    # полный жесткий сброс
+    context.user_data.clear()
     init_user_defaults(context)
-    context.user_data[USER_ROLE_KEY] = ROLE_UNKNOWN
-    context.user_data[USER_LOCATION_KEY] = ""
-    context.user_data[CLIENT_STATE_KEY] = C_NONE
-    context.user_data[COURIER_STATE_KEY] = K_NONE
-    context.user_data.pop("draft_order", None)
-    context.user_data.pop("awaiting_proof_order_id", None)
-    
 
     if SHEETS and update.effective_user:
         SHEETS.log_visit(
             user_tg_id=update.effective_user.id,
             username=update.effective_user.username or "",
             role=ROLE_UNKNOWN,
-            location=context.user_data.get(USER_LOCATION_KEY, ""),
+            location="",
             event="START",
         )
-
-    if SHEETS and update.effective_user:
         SHEETS.log_event(update.effective_user.id, ROLE_UNKNOWN, "START_CMD")
 
     await ui_render(
-    context,
-    chat.id,
-    (
-        "Здравствуйте! 👋\n"
-        "EasyGo — локальная служба доставки.\n\n"
-        "Выберите раздел или нажмите Старт."
-    ),
-    reply_markup=InlineKeyboardMarkup([
-        [InlineKeyboardButton("📜 Правила сервиса", callback_data="info:rules")],
-        [InlineKeyboardButton("🧾 Как сделать заказ", callback_data="info:client")],
-        [InlineKeyboardButton("🛵 Как принять заказ", callback_data="info:courier")],
-        [InlineKeyboardButton("🚀 Старт", callback_data="start:go")],
-    ])
-)
+        context,
+        chat.id,
+        (
+            "👋 Добро пожаловать в EasyGo\n\n"
+            "Выберите действие:"
+        ),
+        reply_markup=kb_home_root()
+    )
 
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id):
@@ -2219,6 +2218,54 @@ async def handle_hard_reset(query, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    
+    # ===== HOME SCREENS =====
+
+    if data == "home:start":
+        await ui_render(
+            context,
+            uid,
+            "📍 Где вы находитесь?",
+            reply_markup=kb_location()
+        )
+        return
+
+    if data == "home:rules":
+        await ui_render(
+            context,
+            uid,
+            text_rules(),
+            reply_markup=kb_back_home()
+        )
+        return
+
+    if data == "home:client":
+        await ui_render(
+            context,
+            uid,
+            text_how_client(),
+            reply_markup=kb_back_home()
+        )
+        return
+
+    if data == "home:courier":
+        await ui_render(
+            context,
+            uid,
+            text_how_courier(),
+            reply_markup=kb_back_home()
+        )
+        return
+
+    if data == "home:back":
+        await ui_render(
+            context,
+            uid,
+            "👋 Добро пожаловать в EasyGo\n\nВыберите действие:",
+            reply_markup=kb_home_root()
+        )
+        return
+    
     query = update.callback_query
     if not query:
         return
@@ -2258,9 +2305,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "start:go":
-        if SHEETS:
-            SHEETS.log_event(uid, current_role, "START_CLICK")
-        await ui_render(context, uid, "📍 Где вы находитесь?", reply_markup=kb_location())
+        await ui_render(
+            context,
+            uid,
+            "📍 Где вы находитесь?",
+            reply_markup=kb_location()
+        )
         return
 
     if data.startswith("loc:"):
