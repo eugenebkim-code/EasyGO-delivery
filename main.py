@@ -729,6 +729,19 @@ def get_active_order_for_courier(courier_id: int) -> Optional["Order"]:
 # =========================
 # UI (KEYBOARDS)
 # =========================
+
+def kb_back_to_start() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️ Назад", callback_data="info:back")]
+    ])
+
+def kb_main_info() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📜 Правила сервиса", callback_data="info:rules")],
+        [InlineKeyboardButton("🧾 Как сделать заказ", callback_data="info:client")],
+        [InlineKeyboardButton("🛵 Как принять заказ", callback_data="info:courier")],
+    ])
+
 def kb_start() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Старт", callback_data="start:go")]])
 
@@ -909,6 +922,59 @@ def kb_client_orders_filters() -> InlineKeyboardMarkup:
 # =========================
 # TEXT HELPERS
 # =========================
+
+
+
+def text_rules() -> str:
+    return (
+        "📜 Правила сервиса EasyGo\n\n"
+        "⚠️ Перед началом всегда вводите /start\n\n"
+        "EasyGo — платформа для связи клиентов и курьеров.\n"
+        "Мы не принимаем оплату и не участвуем в расчетах.\n\n"
+        "💰 Оплата\n"
+        "Клиент платит курьеру напрямую.\n"
+        "Цена фиксируется при создании заказа.\n\n"
+        "🛵 Курьеры\n"
+        "Курьер может только откликнуться на заказ.\n"
+        "Связь с клиентом возможна ТОЛЬКО после принятия заказа.\n\n"
+        "📍 Адреса\n"
+        "Указываются на корейском языке.\n"
+        "Перед принятием заказа курьер обязан проверить маршрут.\n\n"
+        "📸 Подтверждение\n"
+        "Заказ завершается только после отправки фото.\n\n"
+        "🚫 Ответственность\n"
+        "EasyGo не решает споры и не компенсирует убытки.\n"
+        "Нарушения приводят к отключению доступа."
+    )
+
+
+def text_how_client() -> str:
+    return (
+        "🧾 Как сделать заказ\n\n"
+        "1️⃣ Напишите /start\n"
+        "2️⃣ Выберите роль «Я клиент»\n"
+        "3️⃣ Нажмите «Создать доставку»\n"
+        "4️⃣ Укажите адреса и контакт\n\n"
+        "Если доставка вне Дунпо:\n"
+        "— бот покажет рекомендованную цену\n"
+        "— вы можете принять ее или ввести свою\n\n"
+        "После подтверждения заказ становится доступен курьерам.\n"
+        "Связь возможна ТОЛЬКО после принятия заказа курьером."
+    )
+
+
+def text_how_courier() -> str:
+    return (
+        "🛵 Как принять заказ\n\n"
+        "1️⃣ Напишите /start\n"
+        "2️⃣ Выберите роль «Я курьер»\n"
+        "3️⃣ Нажмите «Текущие заявки»\n\n"
+        "❗ До принятия заказа\n"
+        "связь с клиентом запрещена\n\n"
+        "4️⃣ Проверьте адреса через Naver\n"
+        "5️⃣ Нажмите «Взять заказ»\n"
+        "6️⃣ После доставки отправьте фото"
+    )
 
 def build_courier_stats_text(courier_id: int) -> str:
     now = datetime.now()
@@ -1110,7 +1176,20 @@ def init_user_defaults(context: ContextTypes.DEFAULT_TYPE):
     context.user_data.setdefault("warned_naver_check", False)  # предупреждение курьеру, один раз
 
 
+
+
 async def show_welcome(chat, context: ContextTypes.DEFAULT_TYPE):
+    await ui_render(
+        context,
+        chat.id,
+        (
+            "Здравствуйте! 👋\n"
+            "EasyGo — локальная служба доставки.\n\n"
+            "Перед началом рекомендуется написать /start"
+        ),
+        reply_markup=kb_main_info()
+    )
+
     init_user_defaults(context)
     await ui_render(
         context,
@@ -1137,6 +1216,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.pop("draft_order", None)
     context.user_data.pop("awaiting_proof_order_id", None)
     
+
+
     if SHEETS and update.effective_user:
         SHEETS.log_visit(
             user_tg_id=update.effective_user.id,
@@ -1148,6 +1229,17 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if SHEETS and update.effective_user:
         SHEETS.log_event(update.effective_user.id, ROLE_UNKNOWN, "START_CMD")
+
+    await ui_render(
+        context,
+        chat.id,
+        (
+            "Здравствуйте! 👋\n"
+            "EasyGo — локальная служба доставки.\n\n"
+            "Перед началом рекомендуется написать /start"
+        ),
+        reply_markup=kb_main_info()
+    )
 
     await ui_render(
         context,
@@ -2220,6 +2312,29 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_role = context.user_data.get(USER_ROLE_KEY, ROLE_UNKNOWN)
     data = query.data or ""
    
+
+    if data == "info:rules":
+        await ui_render(context, uid, text_rules(), reply_markup=kb_back_to_start())
+        return
+
+    if data == "info:client":
+        await ui_render(context, uid, text_how_client(), reply_markup=kb_back_to_start())
+        return
+
+    if data == "info:courier":
+        await ui_render(context, uid, text_how_courier(), reply_markup=kb_back_to_start())
+        return
+
+    if data == "info:back":
+        await ui_render(
+            context,
+            uid,
+            "Здравствуйте! 👋\nEasyGo — локальная служба доставки.",
+            reply_markup=kb_main_info()
+        )
+        return
+
+
     if data == "courier:orders":
         await handle_courier_orders(query, context)
         return
