@@ -1234,26 +1234,20 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         SHEETS.log_event(update.effective_user.id, ROLE_UNKNOWN, "START_CMD")
 
     await ui_render(
-        context,
-        chat.id,
-        (
-            "Здравствуйте! 👋\n"
-            "EasyGo — локальная служба доставки.\n\n"
-            "Перед началом рекомендуется написать /start"
-        ),
-        reply_markup=kb_main_info()
-    )
-
-    await ui_render(
-        context,
-        update.effective_chat.id,
-        (
-            "Здравствуйте! 👋\n"
-            "EasyGo — локальная служба доставки.\n\n"
-            "Чтобы начать, нажмите кнопку ниже."
-        ),
-        reply_markup=kb_start()
-    )
+    context,
+    chat.id,
+    (
+        "Здравствуйте! 👋\n"
+        "EasyGo — локальная служба доставки.\n\n"
+        "Выберите раздел или нажмите Старт."
+    ),
+    reply_markup=InlineKeyboardMarkup([
+        [InlineKeyboardButton("📜 Правила сервиса", callback_data="info:rules")],
+        [InlineKeyboardButton("🧾 Как сделать заказ", callback_data="info:client")],
+        [InlineKeyboardButton("🛵 Как принять заказ", callback_data="info:courier")],
+        [InlineKeyboardButton("🚀 Старт", callback_data="start:go")],
+    ])
+)
 
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id):
