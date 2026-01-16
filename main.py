@@ -1174,34 +1174,6 @@ def init_user_defaults(context: ContextTypes.DEFAULT_TYPE):
     context.user_data.setdefault("warned_naver_check", False)  # предупреждение курьеру, один раз
 
 
-
-
-async def show_welcome(chat, context: ContextTypes.DEFAULT_TYPE):
-    await ui_render(
-        context,
-        chat.id,
-        (
-            "Здравствуйте! 👋\n"
-            "EasyGo — локальная служба доставки.\n\n"
-            "Перед началом рекомендуется написать /start"
-        ),
-        reply_markup=kb_main_home()
-    )
-
-    init_user_defaults(context)
-    await ui_render(
-        context,
-        chat.id,
-        (
-            "Здравствуйте! 👋\n"
-            "EasyGo - это локальная служба доставки: Дунпо, Асан, Синчанг.\n\n"
-            "Чтобы вернуться на главный экран напишите /start.\n"
-            "Если Вы заметили ошибку, пожалуйста, сообщите разработчику: @luv2win"
-        ),
-        reply_markup=kb_main_home()
-    )
-
-
 # =========================
 # COMMANDS
 # =========================
