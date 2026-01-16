@@ -2312,6 +2312,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=kb_location()
         )
         return
+    
+    
 
     if data.startswith("loc:"):
         loc = data.split(":", 1)[1]
