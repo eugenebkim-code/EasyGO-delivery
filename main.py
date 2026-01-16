@@ -1880,7 +1880,21 @@ def naver_geocode(address: str):
     }
     params = {"query": address}
 
+    log.info(
+        "NAVER GEOCODE REQUEST | addr='%s' | id_set=%s | secret_set=%s",
+        address,
+        bool(headers.get("X-NCP-APIGW-API-KEY-ID")),
+        bool(headers.get("X-NCP-APIGW-API-KEY")),
+    )
+
     r = requests.get(url, headers=headers, params=params, timeout=5)
+
+    log.info(
+        "NAVER GEOCODE RESPONSE | status=%s | body=%s",
+        r.status_code,
+        r.text[:300],  # не больше, чтобы не заспамить
+    )
+
     r.raise_for_status()
     data = r.json()
 
@@ -1890,18 +1904,35 @@ def naver_geocode(address: str):
     a = data["addresses"][0]
     return float(a["y"]), float(a["x"])  # lat, lon
 
-def naver_route_distance_km(start_lat: float, start_lon: float, goal_lat: float, goal_lon: float) -> Optional[float]:
+def naver_route_distance_km(
+    start_lat: float,
+    start_lon: float,
+    goal_lat: float,
+    goal_lon: float,
+) -> Optional[float]:
     """
     Directions 5 API: distance meters -> km
-    Док: summary.distance (meters) в route.traoptimal[0].summary.distance
+    route.traoptimal[0].summary.distance
     """
     url = "https://naveropenapi.apigw.ntruss.com/map-direction/v1/driving"
+
     headers = {
         "X-NCP-APIGW-API-KEY-ID": os.getenv("NAVER_CLIENT_ID"),
         "X-NCP-APIGW-API-KEY": os.getenv("NAVER_CLIENT_SECRET"),
     }
 
+    log.info(
+        "NAVER ROUTE REQUEST | start=%s,%s | goal=%s,%s | id_set=%s | secret_set=%s",
+        start_lat,
+        start_lon,
+        goal_lat,
+        goal_lon,
+        bool(headers.get("X-NCP-APIGW-API-KEY-ID")),
+        bool(headers.get("X-NCP-APIGW-API-KEY")),
+    )
+
     if not headers["X-NCP-APIGW-API-KEY-ID"] or not headers["X-NCP-APIGW-API-KEY"]:
+        log.warning("NAVER ROUTE SKIP: missing API keys")
         return None
 
     params = {
@@ -1911,27 +1942,42 @@ def naver_route_distance_km(start_lat: float, start_lon: float, goal_lat: float,
     }
 
     r = requests.get(url, headers=headers, params=params, timeout=6)
+
+    log.info(
+        "NAVER ROUTE RESPONSE | status=%s | body=%s",
+        r.status_code,
+        r.text[:300],
+    )
+
     r.raise_for_status()
     data = r.json()
 
     route = data.get("route") or {}
     arr = route.get("traoptimal") or []
     if not arr:
+        log.warning("NAVER ROUTE EMPTY")
         return None
 
     summary = (arr[0] or {}).get("summary") or {}
     dist_m = summary.get("distance")
     if dist_m is None:
+        log.warning("NAVER ROUTE NO DISTANCE FIELD")
         return None
 
     try:
-        km = float(dist_m) / 1000.0
-    except Exception:
+        return float(dist_m) / 1000.0
+    except Exception as e:
+        log.warning("NAVER ROUTE DIST PARSE ERROR: %s", e)
         return None
 
-    return km
-
 def calc_recommended_price_krw(pickup_addr: str, drop_addr: str) -> Optional[int]:
+
+    log.info(
+        "PRICE CALC START | pickup='%s' | drop='%s'",
+        pickup_addr,
+        drop_addr,
+    )
+
     try:
         p = naver_geocode(pickup_addr)
         g = naver_geocode(drop_addr)
