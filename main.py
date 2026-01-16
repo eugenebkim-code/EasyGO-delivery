@@ -3117,7 +3117,16 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "💰 Не удалось рассчитать маршрут. Укажите цену вручную (в вонах)."
             )
             return
-
+        
+    # === FALLBACK: главный экран ===
+    if context.user_data.get(USER_ROLE_KEY) == ROLE_UNKNOWN:
+        await ui_render(
+            context,
+            update.effective_chat.id,
+            "Здравствуйте! 👋\nEasyGo — локальная служба доставки.\n\nВыберите раздел или нажмите Старт.",
+            reply_markup=kb_main_home()
+        )
+        return
         
     return
 
