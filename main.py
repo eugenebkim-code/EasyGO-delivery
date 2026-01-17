@@ -1169,6 +1169,29 @@ def run_http():
     log.info("HTTP server on port %s", port)
     httpd.serve_forever()
 
+# =========================
+# HOME ROOT (single entry point)
+# =========================
+HOME_TEXT = (
+    "👋 Добро пожаловать в EasyGo\n\n"
+    "Выберите действие:"
+)
+
+async def render_home_root(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    # сбрасываем FSM, но НЕ трогаем данные в Sheets и не ломаем логику
+    init_user_defaults(context)
+    context.user_data[USER_ROLE_KEY] = ROLE_UNKNOWN
+    context.user_data[CLIENT_STATE_KEY] = C_NONE
+    context.user_data[COURIER_STATE_KEY] = K_NONE
+    context.user_data.pop("draft_order", None)
+    context.user_data.pop("awaiting_proof_order_id", None)
+
+    await ui_render(
+        context,
+        chat_id,
+        HOME_TEXT,
+        reply_markup=kb_home_root()
+    )
 
 # =========================
 # START FLOW
@@ -1201,15 +1224,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         SHEETS.log_event(update.effective_user.id, ROLE_UNKNOWN, "START_CMD")
 
-    await ui_render(
-        context,
-        chat.id,
-        (
-            "👋 Добро пожаловать в EasyGo\n\n"
-            "Выберите действие:"
-        ),
-        reply_markup=kb_home_root()
-    )
+    await render_home_root(context, chat.id)
 
 async def admin_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.effective_user or not is_admin(update.effective_user.id):
@@ -2204,12 +2219,7 @@ async def handle_hard_reset(query, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # иначе — обычный старт
-    await ui_render(
-        context,
-        uid,
-        "👋 Добро пожаловать в EasyGo.\n\nВыберите роль:",
-        reply_markup=kb_role()
-    )
+    await render_home_root(context, uid)
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
@@ -2265,12 +2275,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "home:back":
-        await ui_render(
-            context,
-            uid,
-            "👋 Добро пожаловать в EasyGo\n\nВыберите действие:",
-            reply_markup=kb_home_root()
-        )
+        await render_home_root(context, uid)
         return
     
    
@@ -2287,12 +2292,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "info:back":
-        await ui_render(
-            context,
-            uid,
-            "Здравствуйте! 👋\nEasyGo — локальная служба доставки.",
-            reply_markup=kb_home_root()
-        )
+        await render_home_root(context, uid)
         return
 
 
@@ -2341,7 +2341,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if SHEETS:
             SHEETS.log_event(uid, ROLE_UNKNOWN, "ROLE_RESET")
 
-        await ui_render(context, uid, "👤 Кто вы?", reply_markup=kb_role())
+        await render_home_root(context, uid)
         return
 
     if data == "reset:hard":
@@ -3167,15 +3167,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         
     # === FALLBACK: главный экран ===
-    if context.user_data.get(USER_ROLE_KEY) == ROLE_UNKNOWN:
-        await ui_render(
-            context,
-            update.effective_chat.id,
-            "Здравствуйте! 👋\nEasyGo — локальная служба доставки.\n\nВыберите раздел или нажмите Старт.",
-            reply_markup=kb_home_root()
-        )
-        return
-        
+    await render_home_root(context, update.effective_chat.id)
     return
 
 
@@ -3277,19 +3269,16 @@ async def on_startup(app: Application):
     except Exception:
         log.exception("FATAL startup error")
         raise
-
+    
+    
 async def cmd_go(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
 
     context.user_data.clear()
-    context.user_data["ui_msg_id"] = None
+    context.user_data[UI_MSG_ID_KEY] = None
+    init_user_defaults(context)
 
-    await ui_render(
-        context,
-        uid,
-        "👋 Добро пожаловать в EasyGo.\n\nВыберите роль:",
-        reply_markup=kb_role()
-    )
+    await render_home_root(context, uid)
 
 # =========================
 # MAIN
