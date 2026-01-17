@@ -743,13 +743,7 @@ def kb_home_root() -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🛵 Как принять заказ", callback_data="home:courier")],
     ])
 
-def kb_main_home() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📜 Правила сервиса", callback_data="info:rules")],
-        [InlineKeyboardButton("🧾 Как сделать заказ", callback_data="info:client")],
-        [InlineKeyboardButton("🛵 Как принять заказ", callback_data="info:courier")],
-        [InlineKeyboardButton("🚀 Старт", callback_data="start:go")],
-    ])
+
 
 def kb_back_to_start() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
@@ -2297,7 +2291,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context,
             uid,
             "Здравствуйте! 👋\nEasyGo — локальная служба доставки.",
-            reply_markup=kb_main_home()
+            reply_markup=kb_home_root()
         )
         return
 
@@ -3178,7 +3172,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             context,
             update.effective_chat.id,
             "Здравствуйте! 👋\nEasyGo — локальная служба доставки.\n\nВыберите раздел или нажмите Старт.",
-            reply_markup=kb_main_home()
+            reply_markup=kb_home_root()
         )
         return
         
